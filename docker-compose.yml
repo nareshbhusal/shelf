@@ -1,0 +1,16 @@
+services:
+  shelf:
+    build: .
+    ports:
+      - "127.0.0.1:4321:4321"   # localhost only: there is no authentication
+    volumes:
+      # Your books. Read-write only because highlights/notes are saved inside the PDF you annotate;
+      # nothing else is ever written here. Add :ro (and SHELF_READONLY=1) to forbid that.
+      # Set it with:  LIBRARY_DIR=/path/to/books docker compose up -d
+      - ${LIBRARY_DIR:-./library}:/library
+      # Index, tags, reading lists, progress and cover cache. Back this up.
+      - shelf-data:/data
+    restart: unless-stopped
+
+volumes:
+  shelf-data:
