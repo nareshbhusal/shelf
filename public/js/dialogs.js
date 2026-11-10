@@ -3,7 +3,7 @@ import { refreshMeta, store, tagById } from './store.js';
 import { confirmDialog, modal, toast } from './ui.js';
 import { bookName } from './settings.js';
 import { openWithMenu } from './openwith.js';
-import { dirSegments, fmtBytes, h, hashFor, icon, initials, hueOf, tagColor } from './util.js';
+import { dirSegments, fmtBytes, h, hashFor, icon, initials, hueOf, isFinished, progressText, tagColor } from './util.js';
 
 export const chip = (tag) =>
   h('span', { class: 'chip', style: { '--c': tagColor(tag) } }, h('i', { class: 'dot' }), tag.name);
@@ -219,22 +219,19 @@ export async function openBookInfo(book, { onChange } = {}) {
     img,
   );
 
-  const finished = book.pages && book.progress.page >= book.pages;
+  const finished = isFinished(book);
   const fields = [
     ['Format', book.format.toUpperCase()],
-    book.pages ? ['Pages', String(book.pages)] : null,
+    book.pages ? [book.format === 'epub' ? 'Sections' : 'Pages', String(book.pages)] : null,
     ['Size', fmtBytes(book.size)],
     book.series ? ['Series', book.series + (book.number ? ` #${book.number}` : '')] : null,
-    book.progress.page ? ['Progress', book.pages ? `page ${book.progress.page} of ${book.pages}${finished ? ' (finished)' : ''}` : `page ${book.progress.page}`] : null,
+    book.progress.page ? ['Progress', progressText(book)] : null,
   ].filter(Boolean);
 
   const folderLink = h('a', { href: hashFor('files', dirSegments(book.dir)), onClick: () => m.close() }, book.dir || '(library root)');
 
-  const readable = book.format !== 'epub';
   const actions = [
-    readable
-      ? h('a', { class: 'btn primary', href: hashFor('read', [String(book.id)]), onClick: () => m.close() }, book.progress.page && !finished ? 'Continue reading' : 'Read')
-      : null,
+    h('a', { class: 'btn primary', href: hashFor('read', [String(book.id)]), onClick: () => m.close() }, book.progress.page && !finished ? 'Continue reading' : 'Read'),
     h('button', { class: 'btn', onClick: () => openTagPicker([book], { onChange }) }, icon('tag', 15), 'Tags'),
     h('button', { class: 'btn', onClick: () => openListPicker([book], { onChange }) }, icon('list', 15), 'Lists'),
     h('button', { class: 'btn', onClick: (e) => openWithMenu(e.currentTarget, { bookIds: [book.id] }, 1) }, icon('external', 15), 'Open with…'),
@@ -251,7 +248,6 @@ export async function openBookInfo(book, { onChange } = {}) {
       h('h3', null, bookName(book)),
       book.author ? h('div', { class: 'muted' }, book.author) : null,
       h('dl', null, fields.flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)]), h('dt', null, 'Folder'), h('dd', null, folderLink), h('dt', null, 'File'), h('dd', { class: 'break' }, book.filename)),
-      !readable ? h('div', { class: 'callout' }, 'EPUB reading is not built yet. You can download it, and it is still searchable, taggable and listable.') : null,
       h('div', { class: 'chips' }, tags.length ? tags.map((t) => h('a', { href: hashFor('all', [], { tags: t.id }), onClick: () => m.close() }, chip(t))) : h('span', { class: 'muted small' }, 'No tags')),
       lists.length ? h('div', { class: 'chips' }, lists.map((l) => h('a', { class: 'chip plain', href: hashFor('list', [String(l.id)]), onClick: () => m.close() }, icon('list', 12), l.name))) : null,
       h('div', { class: 'btn-row' }, actions),
@@ -263,7 +259,7 @@ export async function openBookInfo(book, { onChange } = {}) {
               onClick: async () => {
                 if (!(await confirmDialog('Reset reading progress for this book?', { okLabel: 'Reset' }))) return;
                 await api.del(`/books/${book.id}/progress`);
-                book.progress = { page: 0, at: null };
+                book.progress = { page: 0, at: null, pos: null };
                 m.close();
                 onChange?.();
               },

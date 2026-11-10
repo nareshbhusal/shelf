@@ -4,6 +4,7 @@ import { bookName, onSettings, setSetting, settings } from './settings.js';
 import { h, hashFor, icon, clamp, dirSegments } from './util.js';
 import { appName } from './store.js';
 import { openFileInfo } from './fileinfo.js';
+import { epubImpl } from './epubreader.js';
 import { toast } from './ui.js';
 
 const PDFJS = '/vendor/pdfjs';
@@ -17,8 +18,8 @@ function loadPdfjs() {
 }
 
 /**
- * Vertical-scroll reader shared by PDF and CBZ. Format-specific code supplies:
- *   count, buildPage(i) -> element, setWidth(px), destroy()
+ * Vertical-scroll reader shared by PDF, CBZ and EPUB. Format-specific code supplies an `impl`:
+ *   setWidth(px), goTo(n), destroy() (+ restore/step/... for EPUB, whose position is section + fraction)
  * This shell handles the toolbar, current-page tracking, progress saving, zoom and keys.
  */
 export async function createReader(bookId, { page: startPage = 0 } = {}) {
@@ -29,7 +30,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     return { el: h('div', { class: 'empty' }, `Book not found: ${e.message}`), destroy() {} };
   }
 
-  const root = h('div', { class: 'reader' });
+  const isEpub = book.format === 'epub';
+  const root = h('div', { class: isEpub ? 'reader epub' : 'reader' });
   const scroller = h('div', { class: 'reader-scroll' });
   const pagesEl = h('div', { class: 'reader-pages' });
   scroller.append(pagesEl);
@@ -42,12 +44,14 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   let currentPage = 1;
   let total = book.pages ?? 0;
   let saveTimer = null;
+  let currentPos = 0; // EPUB only: how far into the current section (0..1)
   let lastSaved = book.progress.page || 0;
+  let lastSavedPos = book.progress.pos ?? null;
   let impl = null;
   let dead = false;
 
   const titleEl = h('div', { class: 'reader-title' });
-  const widthKey = book.format === 'pdf' ? 'pdfWidth' : 'comicWidth';
+  const widthKey = book.format === 'pdf' ? 'pdfWidth' : isEpub ? 'epubWidth' : 'comicWidth';
   const pageInput = h('input', { class: 'page-input', type: 'text', inputMode: 'numeric', value: '1', 'aria-label': 'Page number' });
   const pageTotal = h('span', { class: 'muted' }, total ? `/ ${total}` : '');
   const bar = h(
@@ -56,6 +60,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     h('a', { class: 'icon-btn', href: backHref, title: 'Back to library (Esc)' }, icon('back')),
     titleEl,
     h('div', { class: 'reader-page' }, pageInput, pageTotal),
+    isEpub ? h('div', { class: 'epub-where muted', title: 'Section / how far through the book' }) : null,
     ann ? ann.toolbar : null,
     h('button', { class: 'icon-btn', title: 'File info (I)', onClick: () => openFileInfo(book, ann) }, icon('info', 18)),
     h('div', { class: 'reader-zoom' },
@@ -71,7 +76,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     const name = bookName(book);
     titleEl.textContent = name;
     titleEl.title = `${name}\n${book.path}`;
-    document.title = `${name}${total ? ` · p. ${currentPage}/${total}` : ''} — ${appName()}`;
+    const where = isEpub ? (total ? ` · ${bookPercent()}%` : '') : total ? ` · p. ${currentPage}/${total}` : '';
+    document.title = `${name}${where} — ${appName()}`;
   }
   setTitles();
   const unsubName = onSettings((k) => k === 'nameSource' && setTitles());
@@ -80,14 +86,61 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   if (ann) root.append(ann.drawer);
 
   // ---------------------------------------------------------------- shared behaviour
+  function bookFraction() { return total ? clamp((currentPage - 1 + currentPos) / total, 0, 1) : 0; }
+  function bookPercent() { return Math.floor(bookFraction() * 100); }
+  const whereEl = bar.querySelector('.epub-where');
+
+  /** EPUB: the reader reports (section, fraction of section) as you scroll. */
+  function setPosition(page, pos) {
+    pos = clamp(pos, 0, 1);
+    if (page === currentPage && Math.abs(pos - currentPos) < 0.002) return;
+    const sectionChanged = page !== currentPage;
+    currentPage = page;
+    currentPos = pos;
+    if (whereEl) whereEl.textContent = `${currentPage}/${total} · ${bookPercent()}%`;
+    if (sectionChanged || bookPercent() !== lastPct) setTitles();
+    lastPct = bookPercent();
+    progressLine.firstChild.style.width = `${bookFraction() * 100}%`;
+    queueSave();
+  }
+  let lastPct = -1;
+
   function setCurrent(n) {
     n = clamp(n, 1, total || 1);
     if (n === currentPage) return;
     currentPage = n;
+    if (!settling) currentPos = readingPos();
     pageInput.value = String(n);
     setTitles();
     progressLine.firstChild.style.width = total ? `${(n / total) * 100}%` : '0';
     queueSave();
+  }
+
+  /** PDF/CBZ: how far down the current page the reading line is (0..1), so reopening lands on the same spot. */
+  let settling = true; // ignore scroll events caused by the initial jump to the saved position
+  function readingPos() {
+    const el = impl?.pageEl?.(currentPage);
+    if (!el) return currentPos;
+    const sr = scroller.getBoundingClientRect();
+    const r = el.getBoundingClientRect();
+    return clamp((sr.top + sr.height * READ_LINE - r.top) / Math.max(1, r.height), 0, 1);
+  }
+  let posTimer = null;
+  if (!isEpub) {
+    scroller.addEventListener(
+      'scroll',
+      () => {
+        if (settling) return;
+        clearTimeout(posTimer);
+        posTimer = setTimeout(() => {
+          const pos = readingPos();
+          if (Math.abs(pos - currentPos) < 0.02) return;
+          currentPos = pos;
+          queueSave();
+        }, 250);
+      },
+      { passive: true },
+    );
   }
 
   function queueSave() {
@@ -96,13 +149,16 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   }
   function flush() {
     clearTimeout(saveTimer);
-    if (currentPage === lastSaved) return;
+    if (!isEpub && !settling) currentPos = readingPos(); // catch a scroll that hasn't been picked up yet
+    const pos = Math.round(currentPos * 1000) / 1000;
+    if (currentPage === lastSaved && (pos === lastSavedPos || (!isEpub && Math.abs(pos - (lastSavedPos ?? 0)) < 0.02))) return;
     lastSaved = currentPage;
+    lastSavedPos = pos;
     // keepalive so it still goes through while the tab is closing
     fetch(`/api/books/${book.id}/progress`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ page: currentPage }),
+      body: JSON.stringify({ page: currentPage, pos }),
       keepalive: true,
     }).catch(() => {});
   }
@@ -154,7 +210,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     // popover, links and buttons, or the end of a text selection.
     if (e.detail > 1 || e.annHandled || ann?.busy() || e.target.closest('a, button, input, textarea, .ann-pop, .ann-pin')) return;
     clickTimer = setTimeout(() => {
-      if (dead || !getSelection()?.isCollapsed) return;
+      if (dead || !(impl?.selectionCollapsed?.() ?? getSelection()?.isCollapsed) || !getSelection()?.isCollapsed) return;
       barOn = bar.classList.contains('away');
       setBar(barOn);
     }, 230);
@@ -165,7 +221,12 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     if (e.target?.tagName === 'INPUT' || e.ctrlKey || e.metaKey || e.altKey) return;
     if (document.getElementById('modal-root').childElementCount) return;
     switch (e.key) {
-      case 'Escape': if (!ann?.consumeEscape()) location.hash = backHref; break;
+      case 'Escape': if (!ann?.consumeEscape() && !impl?.consumeEscape?.()) location.hash = backHref; break;
+      case 'ArrowLeft': if (isEpub) impl?.step(-1); break;
+      case 'ArrowRight': if (isEpub) impl?.step(1); break;
+      case '[': impl?.fontStep?.(-1); break;
+      case ']': impl?.fontStep?.(1); break;
+      case 't': case 'T': impl?.toggleToc?.(); break;
       case 'n': case 'N': ann?.toggleDrawer(); break;
       case 'i': case 'I': openFileInfo(book, ann); break;
       case '+': case '=': zoom(1); break;
@@ -206,6 +267,9 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   // ---------------------------------------------------------------- start
   const explicit = Number(startPage) > 0 ? Number(startPage) : 0; // ?page=N in the link beats the saved position
   const resumeAt = explicit || (book.progress.page > 1 && (!book.pages || book.progress.page < book.pages) ? book.progress.page : 1);
+  // EPUB: resume at section + fraction, unless the last section was already read to its end.
+  const savedPos = book.progress.pos ?? 0;
+  const epubDone = book.pages && book.progress.page >= book.pages && savedPos >= 0.95;
 
   const status = h('div', { class: 'empty' }, 'Opening…');
   pagesEl.append(status);
@@ -214,19 +278,34 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     try {
       if (book.format === 'pdf') impl = await pdfImpl(book, scroller, pagesEl, makeTracker, (n) => (total = n, pageTotal.textContent = `/ ${n}`, setTitles()), ann);
       else if (book.format === 'cbz') impl = await comicImpl(book, scroller, pagesEl, makeTracker, (n) => (total = n, pageTotal.textContent = `/ ${n}`, setTitles()));
-      else throw new Error(`${book.format.toUpperCase()} files can't be read here yet`);
+      else if (isEpub) {
+        impl = await epubImpl(book, {
+          root, scroller, pagesEl, bar, report: setPosition, onKey, onClick: onReadClick,
+          setTotal: (n) => (total = n, setTitles()),
+        });
+      } else throw new Error(`${book.format.toUpperCase()} files can't be read here yet`);
       if (dead) return impl.destroy();
       status.remove();
       impl.setWidth(settings[widthKey]);
       scroller.focus({ preventScroll: true });
-      if (resumeAt > 1) {
+      if (isEpub) {
+        const at = explicit || (epubDone ? 1 : book.progress.page || 1);
+        const pos = explicit || epubDone ? 0 : savedPos;
+        currentPage = 0; // force the first report through
+        await impl.restore(at, pos);
+        if (!explicit && (at > 1 || pos > 0.02)) toast(`Resumed at ${Math.floor(((at - 1 + pos) / total) * 100)}%`, 'quiet');
+      } else if (resumeAt > 1 || (!explicit && savedPos > 0.02 && !(book.pages && book.progress.page >= book.pages))) {
+        // Back to the page you were on, and to the spot within it when we know that (older saves have only the page).
+        const within = !explicit && book.progress.page === resumeAt ? savedPos : 0;
         currentPage = resumeAt;
+        currentPos = within;
         pageInput.value = String(resumeAt);
-        impl.goTo(resumeAt, false);
-        if (!explicit) toast(`Resumed at page ${resumeAt}`);
+        impl.goTo(resumeAt, false, within);
+        if (!explicit) toast(`Resumed at page ${resumeAt}`, 'quiet');
       } else {
         setCurrent(1);
       }
+      setTimeout(() => (settling = false), 900); // after the jump (and its re-settle) has finished
     } catch (e) {
       console.error(e);
       status.replaceChildren(h('h2', null, 'Could not open this book'), h('p', { class: 'err' }, e.message), h('a', { class: 'btn', href: backHref }, 'Back'));
@@ -248,6 +327,21 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
       unsubWidth();
     },
   };
+}
+
+/**
+ * Scroll so `el`'s top is at the top of the viewport (pos = 0), or so the point `pos` (0..1) of the way
+ * down the page sits on the reading line (35% down the viewport), which is where progress is measured.
+ */
+const READ_LINE = 0.35;
+function scrollToPage(scroller, el, smooth, pos = 0) {
+  if (!(pos > 0)) {
+    el.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'instant' });
+    return;
+  }
+  const sr = scroller.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  scroller.scrollTo({ top: scroller.scrollTop + (r.top - sr.top) + pos * r.height - sr.height * READ_LINE, behavior: smooth ? 'smooth' : 'instant' });
 }
 
 // ====================================================================== CBZ
@@ -280,12 +374,13 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setTotal) {
     setWidth(px) {
       pagesEl.style.setProperty('--page-w', `${px}px`);
     },
-    goTo(n, smooth) {
+    pageEl: (n) => imgs[n - 1],
+    goTo(n, smooth, pos = 0) {
       const img = imgs[n - 1];
       if (!img) return;
-      img.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'instant' });
+      scrollToPage(scroller, img, smooth, pos);
       // Pages above us finish loading and change height; settle onto the target once more afterwards.
-      if (!smooth) setTimeout(() => img.scrollIntoView({ block: 'start', behavior: 'instant' }), 400);
+      if (!smooth) setTimeout(() => scrollToPage(scroller, img, false, pos), 400);
     },
     destroy() {
       tracker.disconnect();
@@ -442,11 +537,12 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
       if (anchor) scroller.scrollTop += anchor.el.getBoundingClientRect().top - scroller.getBoundingClientRect().top + frac * anchor.el.offsetHeight;
       pages.filter((p) => p.visible).forEach(render);
     },
-    goTo(n, smooth) {
+    pageEl: (n) => pages[n - 1]?.el,
+    goTo(n, smooth, pos = 0) {
       const p = pages[n - 1];
       if (!p) return;
-      p.el.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'instant' });
-      if (!smooth) setTimeout(() => p.el.scrollIntoView({ block: 'start', behavior: 'instant' }), 500);
+      scrollToPage(scroller, p.el, smooth, pos);
+      if (!smooth) setTimeout(() => scrollToPage(scroller, p.el, false, pos), 500);
     },
     destroy() {
       sizing = false;

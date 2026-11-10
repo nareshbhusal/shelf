@@ -1,6 +1,6 @@
 import { createLibraryView } from './library.js';
 import { createReader } from './reader.js';
-import { applySettings, openSettings } from './settings.js';
+import { applySettings, onSettings, openSettings, setSetting, settings, syncSettings } from './settings.js';
 import { appName, events, refreshInfo, refreshMeta, runScan, store, subscribe, watchScan } from './store.js';
 import { api } from './api.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
@@ -135,6 +135,11 @@ function renderSidebar() {
     if (!byParent.has(d.parent)) byParent.set(d.parent, []);
     byParent.get(d.parent).push(d);
   }
+  // Sidebar order: by name (the server's order), or folders read most recently first. A folder counts as
+  // read when anything inside it (at any depth) was; folders never read go last, by name.
+  if (settings.treeSort === 'recent') {
+    for (const list of byParent.values()) list.sort((a, b) => (b.lastRead ?? 0) - (a.lastRead ?? 0));
+  }
 
   const section = (title, actions, ...kids) =>
     h('section', { class: 'nav-section' }, h('div', { class: 'nav-head' }, h('span', null, title), actions), ...kids);
@@ -170,9 +175,16 @@ function renderSidebar() {
       section('Browse', null,
         link('#/all', route.name === 'all' && !route.query.get('tags') && !route.query.get('q') && route.query.get('untagged') !== '1', icon('library', 15), h('span', { class: 'grow' }, 'All books'), h('span', { class: 'count' }, String(store.tree.root.total))),
         link('#/recent', route.name === 'recent', icon('clock', 15), h('span', { class: 'grow' }, 'Recently read')),
+        link('#/added', route.name === 'added', icon('plus', 15), h('span', { class: 'grow' }, 'Recently added')),
         link(hashFor('all', [], { untagged: 1 }), route.name === 'all' && route.query.get('untagged') === '1', icon('inbox', 15), h('span', { class: 'grow' }, 'Untagged')),
       ),
-      section('Folders', null,
+      section('Folders',
+        h('button', {
+          class: 'icon-btn tiny' + (settings.treeSort === 'recent' ? ' on' : ''),
+          title: settings.treeSort === 'recent' ? 'Folders: recently read first (click for A–Z)' : 'Folders: A–Z (click for recently read first)',
+          'aria-pressed': settings.treeSort === 'recent' ? 'true' : 'false',
+          onClick: () => setSetting('treeSort', settings.treeSort === 'recent' ? 'name' : 'recent'),
+        }, icon('clock', 14)),
         link('#/files', route.name === 'files' && !activeDir, icon('folder', 15), h('span', { class: 'grow' }, 'Library root'), rootDirect ? h('span', { class: 'count' }, String(store.tree.root.total)) : null),
         ...(byParent.get('') ?? []).flatMap((d) => folderNode(d, byParent, activeDir, 0)),
       ),
@@ -266,7 +278,11 @@ async function onRoute() {
   view?.destroy();
   view = null;
   const wasReading = main.firstElementChild?.classList.contains('reader');
-  if (wasReading) main.replaceChildren();
+  if (wasReading) {
+    main.replaceChildren();
+    // The reader just saved its position: refresh so "recently read" ordering and progress are current.
+    setTimeout(() => refreshMeta().catch(() => {}), 700);
+  }
 
   if (route.name === 'read') {
     document.title = appName(); // the reader sets the real title once it knows the book
@@ -293,6 +309,7 @@ async function onRoute() {
 }
 
 window.addEventListener('hashchange', onRoute);
+onSettings((k) => (k === 'treeSort' || k === '*') && renderSidebar());
 subscribe(() => {
   renderSidebar();
   renderScan();
@@ -324,7 +341,7 @@ window.addEventListener('focus', maybeRescan);
 
 // ---------------------------------------------------------------- boot
 (async () => {
-  await Promise.all([refreshMeta(), refreshInfo()]).catch((e) => toast(e.message, 'error'));
+  await Promise.all([refreshMeta(), refreshInfo(), syncSettings()]).catch((e) => toast(e.message, 'error'));
   await onRoute();
   watchScan(); // picks up the scan the server starts on boot; refreshes everything when it ends
 })();

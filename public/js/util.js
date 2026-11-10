@@ -120,3 +120,31 @@ export function hashFor(name, rest = [], query = {}) {
 }
 
 export const dirSegments = (dir) => (dir ? dir.split('/') : []);
+
+/** "today", "yesterday", "5 days ago", "3 weeks ago", "4 months ago". */
+export function ago(ms) {
+  const days = Math.floor((Date.now() - ms) / 86_400_000);
+  if (days <= 0) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 14) return `${days} days ago`;
+  if (days < 60) return `${Math.floor(days / 7)} weeks ago`;
+  return `${Math.floor(days / 30)} months ago`;
+}
+
+/** Reading progress as 0..1. EPUBs count the position inside the section too; the others count pages. */
+export function progressFraction(b) {
+  const p = b.progress;
+  if (!b.pages || !p?.page) return 0;
+  if (b.format === 'epub') return Math.min(1, Math.max(0, (p.page - 1 + (p.pos ?? 0)) / b.pages));
+  return Math.min(1, p.page / b.pages);
+}
+/** Finished = the last page (EPUB: the end of the last section). */
+export const isFinished = (b) =>
+  !!b.pages && b.progress?.page >= b.pages && (b.format !== 'epub' || (b.progress.pos ?? 0) >= 0.9);
+/** "page 12 of 300" / "section 3 of 12 (34%)". */
+export function progressText(b) {
+  const p = b.progress;
+  if (!p?.page) return '';
+  if (b.format === 'epub') return b.pages ? `section ${p.page} of ${b.pages} (${Math.floor(progressFraction(b) * 100)}%)${isFinished(b) ? ', finished' : ''}` : `section ${p.page}`;
+  return b.pages ? `page ${p.page} of ${b.pages}${isFinished(b) ? ' (finished)' : ''}` : `page ${p.page}`;
+}

@@ -27,6 +27,7 @@ const SCHEMA = [
       { key: 'coverFit', label: 'Cover fit', type: 'select', options: [['cover', 'Fill (crop)'], ['contain', 'Fit (letterbox)']], default: 'cover' },
       { key: 'coverRatio', label: 'Cover shape', type: 'select', options: [['2 / 3', 'Portrait 2:3'], ['3 / 4', 'Portrait 3:4'], ['1 / 1', 'Square']], default: '2 / 3' },
       { key: 'titleLines', label: 'Title lines', type: 'select', options: [['1', '1'], ['2', '2'], ['3', '3']], default: '2' },
+      { key: 'groupComics', label: 'Folders with several comics as one card', type: 'checkbox', default: true },
       { key: 'showAuthor', label: 'Show author / folder', type: 'checkbox', default: true },
       { key: 'showFormat', label: 'Show format badge', type: 'checkbox', default: true },
       { key: 'showTags', label: 'Show tags on cards', type: 'checkbox', default: false },
@@ -38,6 +39,8 @@ const SCHEMA = [
     items: [
       { key: 'sort', label: 'Sort by', type: 'select', options: SORTS, default: 'title' },
       { key: 'order', label: 'Order', type: 'select', options: [['asc', 'Ascending'], ['desc', 'Descending']], default: 'asc' },
+      { key: 'treeSort', label: 'Folder list in the sidebar', type: 'select', options: [['name', 'A–Z'], ['recent', 'Recently read first']], default: 'name' },
+      { key: 'addedDays', label: '"Recently added" covers the last', type: 'select', options: [['7', '7 days'], ['30', '30 days'], ['90', '90 days'], ['365', 'year']], default: '30' },
     ],
   },
   {
@@ -55,6 +58,10 @@ const SCHEMA = [
       { key: 'readerBg', label: 'Background', type: 'select', options: [['black', 'Black'], ['dark', 'Dark'], ['gray', 'Gray'], ['paper', 'Paper']], default: 'dark' },
       { key: 'pdfWidth', label: 'PDF page width', type: 'range', min: 400, max: 2000, step: 50, unit: 'px', default: 900 },
       { key: 'comicWidth', label: 'Comic page width', type: 'range', min: 300, max: 1800, step: 50, unit: 'px', default: 900 },
+      { key: 'epubWidth', label: 'EPUB text width', type: 'range', min: 400, max: 1200, step: 20, unit: 'px', default: 720 },
+      { key: 'epubFontSize', label: 'EPUB text size', type: 'range', min: 12, max: 36, step: 1, unit: 'px', default: 18 },
+      { key: 'epubLine', label: 'EPUB line spacing', type: 'range', min: 1.2, max: 2.2, step: 0.05, unit: '', default: 1.6 },
+      { key: 'epubFont', label: 'EPUB font', type: 'select', options: [['serif', 'Serif'], ['sans', 'Sans'], ['book', "The book's own"]], default: 'serif' },
       { key: 'pageGap', label: 'Comic page gap', type: 'range', min: 0, max: 40, step: 2, unit: 'px', default: 0 },
     ],
   },
@@ -79,13 +86,62 @@ export const onSettings = (fn) => {
   return () => listeners.delete(fn);
 };
 
-export function setSetting(key, value) {
-  settings[key] = value;
+// Settings live in the shelf's own data (so every browser and device sees the same ones); the browser
+// keeps a copy only so the page paints correctly before the server answers.
+const cache = () => {
   try {
     localStorage.setItem(KEY, JSON.stringify(settings));
   } catch {
     /* ignore */
   }
+};
+let pending = {};
+let saveTimer = null;
+const flushSettings = () => {
+  clearTimeout(saveTimer);
+  const body = pending;
+  pending = {};
+  if (!Object.keys(body).length) return;
+  api.patch('/settings', body).catch(() => {
+    // Couldn't reach the server: keep them for the next change so nothing is silently lost.
+    pending = { ...body, ...pending };
+  });
+};
+window.addEventListener('pagehide', () => {
+  if (!Object.keys(pending).length) return;
+  try {
+    fetch('/api/settings', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pending), keepalive: true });
+  } catch { /* ignore */ }
+});
+
+/** Called once at startup: the server's copy wins; a first run on a new shelf uploads what this browser already had. */
+export async function syncSettings() {
+  let remote;
+  try {
+    remote = await api.get('/settings');
+  } catch {
+    return; // offline or locked: carry on with the browser's copy
+  }
+  const known = new Set(Object.keys(settings));
+  const have = Object.keys(remote).filter((k) => known.has(k));
+  if (have.length) {
+    for (const k of have) settings[k] = remote[k];
+    cache();
+    applySettings();
+    listeners.forEach((f) => f('*'));
+  } else {
+    const changed = {};
+    for (const g of SCHEMA) for (const it of g.items) if (settings[it.key] !== it.default) changed[it.key] = settings[it.key];
+    if (Object.keys(changed).length) api.patch('/settings', changed).catch(() => {});
+  }
+}
+
+export function setSetting(key, value) {
+  settings[key] = value;
+  cache();
+  pending[key] = value;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(flushSettings, 400);
   applySettings();
   listeners.forEach((f) => f(key));
 }
@@ -151,7 +207,7 @@ async function exportData() {
         try { browserSettings[k] = JSON.parse(raw); } catch { browserSettings[k] = raw; }
       }
     } catch { /* storage unavailable */ }
-    data.browserSettings = browserSettings; // display settings, reader preferences: they live in this browser
+    data.browserSettings = browserSettings; // small per-browser conveniences (pen colour, reader bar...)
     const blob = new Blob([JSON.stringify(data, null, 2) + '\n'], { type: 'application/json' });
     const a = h('a', { href: URL.createObjectURL(blob), download: `shelf-export-${new Date().toISOString().slice(0, 10)}.json` });
     document.body.append(a);
@@ -213,7 +269,9 @@ export function openSettings() {
   });
   const resetBtn = h('button', { class: 'btn' }, 'Reset display settings');
   resetBtn.onclick = () => {
-    localStorage.removeItem(KEY);
+    try { localStorage.removeItem(KEY); } catch { /* ignore */ }
+    pending = {};
+    api.put('/settings', {}).catch((e) => toast(`Couldn't reset on the server: ${e.message}`, 'error'));
     for (const g of SCHEMA) for (const it of g.items) settings[it.key] = it.default;
     applySettings();
     listeners.forEach((f) => f('*'));
@@ -280,8 +338,11 @@ export function openSettings() {
     h('div', { class: 'muted small' }, 'Folder: ', h('code', null, info?.libraryDir ?? '…')),
     warn,
     h('div', { class: 'btn-row' }, rescanBtn, rebuildBtn, purgeBtn),
-    h('div', { class: 'muted small' }, 'Display settings are stored in this browser.'),
+    h('div', { class: 'muted small' }, 'Display settings are saved with this shelf, so every browser you open it from uses the same ones.'),
     h('div', { class: 'btn-row' }, resetBtn),
+    info?.auth
+      ? h('form', { method: 'post', action: '/logout', class: 'btn-row' }, h('button', { class: 'btn', type: 'submit', title: 'Forget the pass key in this browser' }, 'Lock Shelf (sign out)'))
+      : null,
   );
 
   const m = modal({ title: 'Display & settings', body: [...sections, programs, backup, maintenance], wide: true });

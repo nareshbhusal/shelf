@@ -1,6 +1,6 @@
 // Small command line for shelf files, used by shelf.sh:
 //   tsx src/shelfcli.ts check FILE
-//   tsx src/shelfcli.ts init FILE --library DIR [--data DIR] [--port N] [--name TEXT] [--readonly] [--require-mount DIR]...
+//   tsx src/shelfcli.ts init FILE --library DIR [--data DIR] [--port N] [--name TEXT] [--host ADDR] [--passkey KEY] [--readonly] [--require-mount DIR]...
 import fs from 'node:fs';
 import path from 'node:path';
 import { checkShelf, portBusy, printReport, readShelfFile, resolveIn, ShelfFileError } from './shelffile.js';
@@ -40,6 +40,8 @@ async function init(file: string, rest: string[]): Promise<number> {
     else if (k === '--data') o.data = tidy(dir, resolveIn(process.cwd(), v()));
     else if (k === '--port') o.port = Number(v());
     else if (k === '--name') o.name = v();
+    else if (k === '--host') o.host = v();
+    else if (k === '--passkey') o.passkey = v();
     else if (k === '--readonly') o.readonly = true;
     else if (k === '--require-mount') mounts.push(resolveIn(process.cwd(), v()));
     else throw new ShelfFileError(`unknown option ${k}`);
@@ -47,7 +49,7 @@ async function init(file: string, rest: string[]): Promise<number> {
   if (!o.library) throw new ShelfFileError('--library DIR is required');
   o.data ??= 'shelf-data';
   if (mounts.length) o.requireMount = mounts;
-  const ordered = Object.fromEntries(['name', 'library', 'data', 'port', 'readonly', 'requireMount'].filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
+  const ordered = Object.fromEntries(['name', 'library', 'data', 'port', 'host', 'passkey', 'readonly', 'requireMount'].filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
   fs.writeFileSync(abs, JSON.stringify(ordered, null, 2) + '\n', { flag: 'wx' });
   console.log(`Wrote ${abs}:\n${fs.readFileSync(abs, 'utf8')}`);
   return check(abs);
@@ -56,7 +58,7 @@ async function init(file: string, rest: string[]): Promise<number> {
 try {
   if (cmd === 'check' && args[0]) process.exit(await check(args[0]));
   if (cmd === 'init' && args[0]) process.exit(await init(args[0], args.slice(1)));
-  console.error('usage: shelfcli check FILE | init FILE --library DIR [--data DIR] [--port N] [--name TEXT] [--readonly] [--require-mount DIR]');
+  console.error('usage: shelfcli check FILE | init FILE --library DIR [--data DIR] [--port N] [--name TEXT] [--host ADDR] [--passkey KEY] [--readonly] [--require-mount DIR]');
   process.exit(2);
 } catch (e) {
   console.error(`Error: ${(e as Error).message}`);

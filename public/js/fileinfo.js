@@ -2,7 +2,7 @@ import { api } from './api.js';
 import { copyText, toastCopied } from './annotations.js';
 import { bookName } from './settings.js';
 import { modal, toast } from './ui.js';
-import { fmtBytes, h, hashFor, dirSegments, icon } from './util.js';
+import { fmtBytes, h, hashFor, dirSegments, icon, progressText } from './util.js';
 
 const when = (ms) => (ms ? new Date(ms).toLocaleString() : '—');
 
@@ -30,7 +30,7 @@ export async function openFileInfo(book, ann) {
   add('Folder', info.dir ? h('a', { href: hashFor('files', dirSegments(info.dir)), onClick: () => m.close() }, info.dir) : h('a', { href: hashFor('files', []), onClick: () => m.close() }, '(top of the library)'));
   add('Format', info.format.toUpperCase());
   add('Size', `${fmtBytes(info.size)} (${info.size.toLocaleString()} bytes)`);
-  add('Pages', info.pages);
+  add(info.format === 'epub' ? 'Sections' : 'Pages', info.pages);
   add('Modified', when(info.modifiedAt));
   add('Added to Shelf', when(info.addedAt));
   add('Shown as', bookName(info));
@@ -38,7 +38,7 @@ export async function openFileInfo(book, ann) {
   add('Author', info.author);
   add('Series', info.series ? `${info.series}${info.number ? ` #${info.number}` : ''}` : '');
   if (info.progress?.page) {
-    add('Progress', `page ${info.progress.page}${info.pages ? ` of ${info.pages} (${Math.round((info.progress.page / info.pages) * 100)}%)` : ''}${info.progress.at ? `, last read ${when(info.progress.at)}` : ''}`);
+    add('Progress', `${progressText(info)}${info.progress.at ? `, last read ${when(info.progress.at)}` : ''}`);
   }
   add('Tags', info.tags.length ? h('span', { class: 'chips' }, info.tags.map((t) => h('span', { class: 'chip plain' }, t))) : 'none');
   add(

@@ -2,9 +2,9 @@
 
 A small, local book and manga server. Point it at a folder; browse your tree of folders, tag
 books, build reading lists, search, highlight and take notes in PDFs, open books in your own
-programs, and read PDFs and CBZ comics in the browser.
+programs, and read PDFs, EPUBs and comics (CBZ / ZIP) in the browser.
 
-No users, no login, one process, one SQLite file. **Your books are never copied** (unlike Calibre,
+No user accounts, one optional pass key, one process, one SQLite file. **Your books are never copied** (unlike Calibre,
 Shelf has no library of its own: your folders stay exactly as you keep them). The library is only
 read, with one deliberate exception: highlights and notes you add are saved inside that PDF
 (see "Highlights and notes").
@@ -39,13 +39,18 @@ error from a prebuilt database add-on is gone.
 
 Everything Shelf knows beyond your files is in one folder, `~/.local/share/shelf` by default:
 
-- `shelf.db`: tags, reading lists, reading progress, your saved "Open with" programs, the index.
+- `shelf.db`: tags, reading lists, reading progress, your saved "Open with" programs, your display
+  settings, the index.
   **This is the file to back up.** `./shelf.sh backup` (instance running) or Settings > "Download
   backup" makes a consistent copy; `./shelf.sh restore FILE` puts it back. Books are matched by content
   fingerprint, so a restore onto moved or renamed files still reattaches tags, lists and progress.
 - `thumbs/`: cover cache. Rebuilt on demand, no need to back it up.
 - Highlights, notes and drawings are **not** in there: they live inside the PDFs themselves.
-- Display settings (theme, card size, ...) are kept by the browser, not backed up.
+- Display settings (theme, card size, reader widths, EPUB text size, ...) are saved in `shelf.db` too, so
+  every browser and device opening this shelf uses the same ones, and they are in the backup. A browser
+  keeps a copy only so the page paints right before the server answers; the first time a shelf has no
+  saved settings, what your browser already had is uploaded. Small per-browser conveniences (pen colour,
+  reader-bar state) stay in the browser.
 
 ### Several libraries at once
 
@@ -69,7 +74,7 @@ small JSON file that sits inside the drive, and nothing else remembers it:
 
 ```json
 { "name": "private", "library": "books", "data": "shelf-data", "port": 4322, "readonly": false,
-  "requireMount": ["/home/you/mounted_decrypted"] }
+  "passkey": "a long phrase", "host": "0.0.0.0", "requireMount": ["/home/you/mounted_decrypted"] }
 ```
 
 ```bash
@@ -81,7 +86,8 @@ small JSON file that sits inside the drive, and nothing else remembers it:
 - Paths may be absolute, start with `~/`, or be relative to the folder holding the file, so the whole
   folder can be mounted somewhere else and still work. Only `library` is required. If `data` is left
   out it is `shelf-data` next to the file, never a global folder. `name` is shown in the sidebar and tab
-  title (handy with several instances); `requireMount` lists mount points that must really be mounted.
+  title (handy with several instances); `requireMount` lists mount points that must really be mounted;
+  `passkey` and `host` are described under "Pass key" below (`init` takes `--passkey` and `--host`).
 - Before anything starts, the file is checked: valid JSON and known keys (typos are flagged), the library
   exists, is readable, is writable (unless `readonly`) and contains books, mounts are real mounts, the data
   folder is usable (a missing *parent* is refused, because creating it would write to the wrong disk), the
@@ -113,9 +119,28 @@ frontend, `./shelf.sh native` is faster: edit, refresh the browser, no rebuild.
 | `LIBRARY_DIR`     | `./library`   | Folder to index                                           |
 | `DATA_DIR`        | `./data`      | SQLite database and cover cache                           |
 | `PORT`            | `4321`        | Port                                                      |
-| `HOST`            | `127.0.0.1`   | Bind address. Only change it if you add auth.             |
+| `HOST`            | `127.0.0.1`   | Bind address. `0.0.0.0` opens it to your network: set a pass key |
+| `SHELF_PASSKEY`   | none          | Require this pass key to open Shelf (see "Pass key")      |
 | `SHELF_READONLY`  | off           | `1`: never write into the library (no saving highlights)  |
 | `SHELF_ALLOWED_HOSTS` | none      | Extra host names allowed in the Host header (reverse proxies) |
+
+## Pass key
+
+Set one and nobody who can reach the port gets anything (pages, scripts, covers, books, the API) without
+it. It is one shared secret, not accounts.
+
+```bash
+SHELF_PASSKEY='a long phrase' HOST=0.0.0.0 ./shelf.sh native     # or "passkey" / "host" in a shelf file
+```
+
+- Visitors get a login page; a correct key sets a cookie (HttpOnly, SameSite=Strict, 30 days) that
+  survives restarts. Changing the pass key logs everyone out. Settings > "Lock Shelf" signs out this browser.
+- After 8 wrong guesses from one address in 10 minutes, further tries wait.
+- It travels over plain HTTP unless you put HTTPS in front (a reverse proxy such as Caddy or nginx; add its
+  host name to `SHELF_ALLOWED_HOSTS`). On a home network that is the usual trade-off; on anything wider, use HTTPS.
+- Shelf warns at start when it listens beyond localhost without a pass key, and `check` does too.
+- In a shelf file the key sits in the file: keep that file where only you can read it (on an encrypted
+  drive that is already true). The key is never printed, logged or put in the data export.
 
 ## Does it find new files by itself?
 
@@ -138,6 +163,20 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
 ## Using it
 
 - **Folders** mirror the directory tree. "Subfolders" shows everything below the current folder.
+  The sidebar list is A–Z by default; the clock button next to "Folders" (or Settings > Sorting) puts the
+  folders you read most recently first (a folder counts as read when anything inside it, at any depth, was).
+  Folders you never read stay at the bottom, A–Z. The choice is saved with the shelf.
+- **Comic folders.** A folder with two or more comic files (`.cbz` / `.zip`) directly inside is shown as one
+  card (a stacked cover from its first comic, the folder's name, a ×N badge, "n read"); opening it lists
+  its comics alphabetically. Series and collections of one-shots are treated alike. A folder whose only
+  content is a single comic (the layout Kavita requires) disappears from the listing and that comic is
+  shown itself. Everything else stays an ordinary folder, and "Subfolders" shows the flat list. The card's
+  menu can tag, or add to a reading list, all of its comics at once. Settings > Library > "Folders with
+  several comics as one card" turns this off. Folders of loose image files (no archive) are not indexed yet.
+- **Recently added** (sidebar) lists books Shelf first found in the last 7 / 30 / 90 days or year (your
+  choice, saved). The date is when Shelf first indexed the file, not the file's modified date; the first
+  scan of a library is the starting point and doesn't count; moving, renaming or editing a file keeps its
+  original date. The same rules are written at the top of that page.
 - **Names**: cards show the file name by default; Settings > "Show names from" switches to the
   title found inside the file. Sorting follows the choice. The browser tab title says what you are
   reading and on which page.
@@ -160,14 +199,16 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   reachable. Running natively needs no helper.
 - **Export data** (Settings > Storage & backup): a readable JSON file with your tags (colours, counts),
   reading lists in order, per-book tags/lists/progress, programs, display settings and the book index.
+  (Progress for EPUBs includes the position inside the section.)
   Books carry path and content fingerprint. It is for reading, diffing and moving data around; the
   backup is for restoring. Highlights, notes and drawings aren't in it (they are in the PDFs).
 - **Settings** (gear at the bottom of the sidebar, or press `,`) controls layout, card size, cover fit, what each card shows, theme, accent
-  colour, UI size and reader widths. It all lives in one table in `public/js/settings.js`.
+  colour, UI size, reader widths and EPUB text. It all lives in one table in `public/js/settings.js`.
 - **Reader**: vertical scroll. Click (or tap) anywhere on the page to hide or show the top bar; it
   stays as you left it. Keys: `+` `-` width, `0` fit window, `n` notes panel, `p` pen, `Ctrl+Z` /
   `Ctrl+Shift+Z` undo and redo, `i` file info, `Esc` back, `f` fullscreen; type a page number to jump. Progress is
-  saved and resumed automatically. The (i) button shows everything about the file: location (copyable),
+  saved and resumed automatically, to the spot within the page (PDF, CBZ) or section (EPUB), not just the page.
+  EPUB-only keys: `t` contents, `[` `]` smaller/larger text, `←` `→` previous/next section. The (i) button shows everything about the file: location (copyable),
   size, dates, pages, tags, reading lists, progress, number of annotations, fingerprint and, for PDFs,
   version, producer and page size.
 
@@ -205,7 +246,7 @@ Shelf's database. How it writes, because this is the only place Shelf touches yo
   progress stay attached. If you annotate in another program, Shelf treats it like any edit of a file.
 - Annotation types made elsewhere that Shelf doesn't know (text boxes, stamps, shapes) are left untouched
   in the file but aren't drawn in Shelf's reader.
-- Comics and EPUBs have no standard place for annotations, so they don't get this.
+- Comics and EPUBs have no standard place for annotations, so they don't get this (yet, for EPUB).
 - The library folder must be writable by the user running Shelf. `--readonly` / `SHELF_READONLY=1`
   turns saving off (existing highlights are still shown).
 - No cross-book "all my notes" page yet: it would mean opening every PDF to look for annotations.
@@ -229,16 +270,37 @@ Limits:
 |-----------------|:---------------------:|:-----:|--------------------------------|:------:|:-----:|
 | PDF             | yes | page 1 | title, author, pages (poppler) | yes (pdf.js) | yes |
 | CBZ / ZIP of images | yes | first page | `ComicInfo.xml` if present; pages | yes | no |
-| EPUB            | yes | cover image | title, author, series (Calibre/EPUB3) | **not yet** (download or Open with) | no |
+| EPUB            | yes | cover image | title, author, series (Calibre/EPUB3), sections | yes (own, see below) | no |
+
+Progress stores the page plus how far down it you were (measured at a reading line 35% down the window).
+Reopening scrolls to that spot; a book saved by an older version, or opened with `?page=N`, opens at the page top.
 
 Junk metadata such as "Microsoft Word - foo.docx" is ignored and the filename used instead. A `.zip`
-with no images is not indexed. Pages in comics sort naturally (`page2` before `page10`). Rotated and
+(any case: `.ZIP`, `.Cbz`) is treated exactly like a `.cbz`; one with no images is not indexed. Images may sit in subfolders inside the archive. Pages in comics sort naturally (`page2` before `page10`). Rotated and
 cropped PDF pages are laid out correctly, including their selectable text.
+
+### The EPUB reader
+
+Continuous scroll through the whole book, like the other readers. Each section (chapter file) is shown in
+its own sandboxed frame and loaded only when you get near it, so large books open quickly.
+
+- Contents (EPUB3 nav or EPUB2 NCX) in a side panel (`t`); internal links, footnotes and cross-references
+  work, with a Back button after a link jump. External links open in a new tab.
+- Text size, line spacing and font (serif, sans, or the book's own) from the **Aa** button or `[` `]`; text
+  width like the other readers. Colours follow your theme and "reader background" (the book's own text
+  and background colours are overridden so dark mode stays readable).
+- Progress is the section plus how far into it, so reopening lands where you stopped. The library shows
+  it as a percentage; "pages" for an EPUB means sections.
+- **Scripts in books never run**, nothing loads from outside the book, and the frames can't submit forms or
+  open windows (sandbox plus a strict Content-Security-Policy on every file served from inside an EPUB).
+- Sloppy XHTML that isn't well-formed XML is shown through the forgiving HTML parser instead.
+- Not there yet: highlights/notes in EPUBs, search inside a book, paged mode, fixed-layout books (shown as
+  flowing text), DRM-protected books (can't be read at all).
 
 ## Not built yet
 
-EPUB reader, CBR/RAR, paged and right-to-left reader modes, click zones, next-volume button,
-smart lists, bulk rename, metadata editing, a file watcher, authentication.
+CBR/RAR, paged and right-to-left reader modes, click zones, next-volume button,
+smart lists, bulk rename, metadata editing, a file watcher, per-user accounts.
 
 ## Layout
 
@@ -246,7 +308,8 @@ smart lists, bulk rename, metadata editing, a file watcher, authentication.
 src/config.ts   paths, ports, formats        src/scanner.ts  walk, fingerprint, moves, cleanup trigger
 src/db.ts       SQLite (node:sqlite)               src/meta.ts     PDF / EPUB / CBZ metadata
 src/zip.ts      single entries from zips     src/covers.ts   lazy cover cache (by fingerprint)
-src/shelffile.ts shelf-file checks (+ shelfcli.ts)
+src/shelffile.ts shelf-file checks (+ shelfcli.ts)   src/auth.ts  pass key login
+src/epub.ts     EPUB structure/resources     public/js/epubreader.js  EPUB reader
 src/pdfnotes.ts highlights/notes inside PDFs src/launch.ts   "Open with" (no shell, argv only)
 src/hygiene.ts  orphan cleanup, storage stats
 src/server.ts   REST API + static files
@@ -260,7 +323,9 @@ substitute for mupdf).
 
 ## Safety notes
 
-There is no authentication, so it binds to localhost. Cross-origin write requests (e.g. from a web
+By default it binds to localhost; with a pass key it can be opened to your network (see "Pass key").
+Cross-origin write requests (e.g. from a web
 page you have open) are rejected, as are requests with an unexpected Host header (DNS rebinding).
 "Open with" only ever runs commands you saved in Settings, never anything supplied by a request.
-Don't expose the port to a network without putting a login in front of it.
+Don't expose the port beyond a network you trust: the pass key is a gate, not a hardened login, and without
+HTTPS it travels in the clear.

@@ -4,15 +4,11 @@ import { openWithMenu, readerMenuItems } from './openwith.js';
 import { bookName, onSettings, setSetting, settings, SORTS } from './settings.js';
 import { booksChanged, events, refreshMeta, store, subscribe, tagById } from './store.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
-import { dirSegments, fmtBytes, h, hashFor, hueOf, icon, initials, plural } from './util.js';
+import { ago, dirSegments, fmtBytes, h, hashFor, hueOf, icon, initials, plural, progressFraction } from './util.js';
 
-const readable = (b) => b.format !== 'epub';
 const openHref = (b) => hashFor('read', [String(b.id)]);
 
-function finishedPct(b) {
-  if (!b.pages || !b.progress.page) return 0;
-  return Math.min(100, Math.round((b.progress.page / b.pages) * 100));
-}
+const finishedPct = (b) => Math.round(progressFraction(b) * 100);
 
 /** Builds the books query for a route, plus a heading. */
 function describe(route) {
@@ -39,6 +35,8 @@ function describe(route) {
   } else if (route.name === 'recent') {
     params.set('recent', '1');
     title = 'Recently read';
+  } else if (route.name === 'added') {
+    title = 'Recently added'; // the time window is added in load(), since it's a setting you can change here
   } else {
     for (const k of ['q', 'tags', 'format']) if (q.get(k)) params.set(k, q.get(k));
     if (q.get('untagged') === '1') params.set('untagged', '1');
@@ -53,8 +51,10 @@ export function createLibraryView(route) {
   const { params, crumbs, title, ctx } = describe(route);
   const isList = ctx.kind === 'list';
   const isRecent = ctx.kind === 'recent';
+  const isAdded = ctx.kind === 'added';
   let listSort = 'manual'; // lists default to the order you arranged; this isn't a global setting
   let books = [];
+  let dirInfo = new Map(); // child folder path -> {kind: plain|group|single, ...} (files view only)
   let loaded = false;
   let dead = false;
   let reqSeq = 0;
@@ -71,10 +71,10 @@ export function createLibraryView(route) {
   const content = h('div', { class: 'lib-content' });
   root.append(head, filters, selBar, content);
 
-  const sortKey = () => (isRecent ? 'read' : isList ? listSort : settings.sort);
+  const sortKey = () => (isRecent ? 'read' : isAdded ? 'added' : isList ? listSort : settings.sort);
   // "Name" sorts by whatever name is displayed, so the order always matches what you see.
   const apiSort = () => (sortKey() === 'title' && settings.nameSource === 'filename' ? 'filename' : sortKey());
-  const sortOrder = () => (isRecent ? 'desc' : isList && listSort === 'manual' ? 'asc' : settings.order);
+  const sortOrder = () => (isRecent || isAdded ? 'desc' : isList && listSort === 'manual' ? 'asc' : settings.order);
 
   // ------------------------------------------------------------ data
   async function load() {
@@ -82,10 +82,15 @@ export function createLibraryView(route) {
     const p = new URLSearchParams(params);
     p.set('sort', apiSort());
     p.set('order', sortOrder());
+    if (isAdded) p.set('added', String(settings.addedDays));
+    // Comic folders: a folder with 2+ comics is one card; a folder with a single comic shows that comic.
+    const folders = ctx.kind === 'files' && route.query.get('r') !== '1' && settings.groupComics;
+    if (folders) p.set('collapse', '1');
     try {
-      const data = await api.get('/books?' + p);
+      const [data, dirs] = await Promise.all([api.get('/books?' + p), folders ? api.get('/dirs?parent=' + encodeURIComponent(ctx.dir)) : []]);
       if (dead || seq !== reqSeq) return;
       books = data;
+      dirInfo = new Map(dirs.map((d) => [d.path, d]));
       loaded = true;
       for (const id of [...selected]) if (!books.some((b) => b.id === id)) selected.delete(id);
       render();
@@ -138,7 +143,16 @@ export function createLibraryView(route) {
       );
     }
 
-    if (!isRecent) {
+    if (isAdded) {
+      controls.append(
+        h(
+          'select',
+          { class: 'sel', title: 'How far back to look', value: String(settings.addedDays), onChange: (e) => setSetting('addedDays', e.target.value) },
+          [['7', 'Last 7 days'], ['30', 'Last 30 days'], ['90', 'Last 90 days'], ['365', 'Last year']].map(([v, l]) => h('option', { value: v }, l)),
+        ),
+      );
+    }
+    if (!isRecent && !isAdded) {
       const options = isList ? [['manual', 'Manual order'], ...SORTS] : SORTS;
       const sel = h(
         'select',
@@ -279,7 +293,7 @@ export function createLibraryView(route) {
 
   function bookCard(book, index) {
     const pct = finishedPct(book);
-    const sub = book.author ?? (book.series ? book.series + (book.number ? ` #${book.number}` : '') : book.dir.split('/').at(-1) ?? '');
+    const sub = isAdded ? `Added ${ago(book.addedAt)}` : book.author ?? (book.series ? book.series + (book.number ? ` #${book.number}` : '') : book.dir.split('/').at(-1) ?? '');
     const check = h(
       'button',
       {
@@ -304,7 +318,7 @@ export function createLibraryView(route) {
           e.preventDefault();
           e.stopPropagation();
           popMenu(e.currentTarget, [
-            readable(book) ? { label: 'Open', onClick: () => (location.hash = openHref(book)) } : null,
+            { label: 'Open', onClick: () => (location.hash = openHref(book)) },
             { label: 'Details', onClick: () => openBookInfo(book, { onChange: () => { replaceCard(book); } }) },
             { label: 'Tags…', onClick: () => openTagPicker([book], { onChange: afterEdit(() => [book]) }) },
             { label: 'Add to reading list…', onClick: () => openListPicker([book], { onChange: afterEdit(() => [book]) }) },
@@ -320,7 +334,7 @@ export function createLibraryView(route) {
       'a',
       {
         class: 'card book' + (selected.has(book.id) ? ' selected' : ''),
-        href: readable(book) ? openHref(book) : '#',
+        href: openHref(book),
         dataset: { id: book.id, format: book.format },
         title: `${bookName(book)}\n${book.path}`,
         draggable: isList && listSort === 'manual',
@@ -328,9 +342,6 @@ export function createLibraryView(route) {
           if (e.ctrlKey || e.metaKey || e.shiftKey || selected.size > 0) {
             e.preventDefault();
             toggleSelect(book, index, e.shiftKey);
-          } else if (!readable(book)) {
-            e.preventDefault();
-            openBookInfo(book, { onChange: () => replaceCard(book) });
           }
         },
         onContextmenu: (e) => {
@@ -344,7 +355,7 @@ export function createLibraryView(route) {
         { class: 'meta' },
         h('div', { class: 'title' }, bookName(book)),
         h('div', { class: 'sub' }, sub),
-        h('div', { class: 'row-info' }, h('span', null, book.pages ? `${book.pages} p` : ''), h('span', null, fmtBytes(book.size)), h('span', null, book.dir)),
+        h('div', { class: 'row-info' }, h('span', null, book.pages ? `${book.pages} ${book.format === 'epub' ? 'sec' : 'p'}` : ''), h('span', null, fmtBytes(book.size)), h('span', null, book.dir)),
         tagChips(book),
       ),
     );
@@ -367,6 +378,51 @@ export function createLibraryView(route) {
       { class: 'card folder', href: hashFor('files', dirSegments(d.path), rec ? { r: 1 } : {}) },
       h('div', { class: 'cover-wrap' }, h('div', { class: 'folder-art' }, icon('folder', 40))),
       h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, plural(d.total, 'book'))),
+    );
+  }
+
+  /** A folder holding 2+ comics: one card, named after the folder, covered by its first comic. */
+  function groupCard(d, info) {
+    const rec = route.query.get('r') === '1';
+    const pct = info.units ? Math.round((info.done / info.units) * 100) : 0;
+    const img = h('img', { loading: 'lazy', decoding: 'async', alt: '', draggable: false });
+    img.src = coverUrl(info.cover);
+    img.addEventListener('error', () => img.remove());
+    const groupBooks = () => api.get('/books?dir=' + encodeURIComponent(d.path));
+    const more = h(
+      'button',
+      {
+        class: 'more',
+        title: 'More',
+        'aria-label': 'More actions',
+        onClick: (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          popMenu(e.currentTarget, [
+            { label: 'Open', onClick: () => (location.hash = hashFor('files', dirSegments(d.path))) },
+            { label: `Tag all ${info.units}…`, onClick: async () => openTagPicker(await groupBooks(), { onChange: () => {} }) },
+            { label: `Add all ${info.units} to reading list…`, onClick: async () => openListPicker(await groupBooks(), { onChange: () => {} }) },
+          ]);
+        },
+      },
+      icon('more', 16),
+    );
+    return h(
+      'a',
+      { class: 'card folder group', href: hashFor('files', dirSegments(d.path), rec ? { r: 1 } : {}), title: `${d.name}\n${plural(info.units, 'comic')}`, onContextmenu: (e) => { e.preventDefault(); more.click(); } },
+      h(
+        'div',
+        { class: 'series-stack' },
+        h(
+          'div',
+          { class: 'cover-wrap' },
+          h('div', { class: 'cover' }, h('div', { class: 'ph', style: { background: `hsl(${hueOf(d.name)} 32% 26%)` } }, h('span', null, initials(d.name))), img),
+          h('span', { class: 'badge fmt' }, `×${info.units}`),
+          more,
+          pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null,
+        ),
+      ),
+      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${plural(info.units, 'comic')}${info.done ? `, ${info.done} read` : ''}`)),
     );
   }
 
@@ -424,9 +480,14 @@ export function createLibraryView(route) {
     }
 
     const items = [];
+    if (isAdded) items.push(addedNote());
     if (ctx.kind === 'files' && route.query.get('r') !== '1') {
       const dir = route.rest.join('/');
-      for (const d of store.tree.dirs.filter((x) => x.parent === dir)) items.push(folderCard(d));
+      for (const d of store.tree.dirs.filter((x) => x.parent === dir)) {
+        const info = dirInfo.get(d.path);
+        if (info?.kind === 'single') continue; // its one comic is in `books`
+        items.push(info?.kind === 'group' ? groupCard(d, info) : folderCard(d));
+      }
     }
     books.forEach((b, i) => {
       const el = bookCard(b, i);
@@ -434,7 +495,9 @@ export function createLibraryView(route) {
       items.push(el);
     });
 
-    if (!items.length) {
+    if (!books.length && isAdded) {
+      content.replaceChildren(h('div', { class: 'grid' }, items), emptyState());
+    } else if (!items.length) {
       content.replaceChildren(emptyState());
     } else {
       content.replaceChildren(h('div', { class: 'grid' }, items));
@@ -442,6 +505,23 @@ export function createLibraryView(route) {
     root.classList.toggle('selecting', selected.size > 0);
     renderSelBar();
     if (scroller && keepY) scroller.scrollTop = keepY;
+  }
+
+  /** The rule for this page, stated on the page itself. */
+  function addedNote() {
+    return h(
+      'div',
+      { class: 'page-note' },
+      h('strong', null, 'What counts as "recently added"'),
+      h(
+        'ul',
+        null,
+        h('li', null, `Books Shelf first found in the last ${settings.addedDays} days, newest first. Change the range with the menu above.`),
+        h('li', null, 'The date is when Shelf first indexed the file (at a scan), not the file\'s own modified date. A scan runs when Shelf starts and when you return to this tab.'),
+        h('li', null, 'The very first scan of a library is the starting point and does not count, otherwise every book would look new.'),
+        h('li', null, 'Moving or renaming a file keeps its original date; so does editing it (for example, adding PDF notes).'),
+      ),
+    );
   }
 
   function emptyState() {
@@ -459,6 +539,7 @@ export function createLibraryView(route) {
     const msg =
       isList ? 'This reading list is empty. Select books anywhere and use “Add to list”.'
       : isRecent ? 'Nothing read yet. Books you open show up here.'
+      : isAdded ? `Nothing new in the last ${settings.addedDays} days.`
       : ctx.kind === 'all' ? 'No books match.'
       : 'This folder is empty.';
     return h('div', { class: 'empty' }, icon('inbox', 40), h('p', null, msg));
@@ -474,7 +555,7 @@ export function createLibraryView(route) {
   });
   const unsubSettings = (() => {
     const fn = (key) => {
-      if (key === 'sort' || key === 'order' || key === 'nameSource') load();
+      if (key === 'sort' || key === 'order' || key === 'nameSource' || key === 'groupComics' || key === 'addedDays') load();
       else if (key === 'view' || key === '*') render();
       else renderHead();
     };

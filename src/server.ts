@@ -2,10 +2,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { DATA_DIR, HOST, HOST_LIBRARY, IN_DOCKER, LIBRARY_DIR, OPENER_SOCKET, PDFJS_DIR, PORT, READONLY, ROOT, SHELF_NAME } from './config.js';
+import { AUTH_ON, authGate } from './auth.js';
 import { ensureThumb } from './covers.js';
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
+import { EPUB_MIME, epubStructure } from './epub.js';
 import { pdfDetails, toolsAvailable } from './meta.js';
 import { purgeMissing, scanState, startScan } from './scanner.js';
 import {
@@ -45,7 +47,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '2mb' }));
 
-// No auth means any website you visit could poke localhost. Refuse cross-origin writes.
+// Any website you visit could poke localhost. Refuse cross-origin writes.
 app.use((req, res, next) => {
   if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
   const origin = req.headers.origin;
@@ -60,6 +62,8 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+authGate(app); // no-op unless a pass key is set; everything below needs the login
 
 // ---------- helpers ----------
 
@@ -124,11 +128,77 @@ function bookDTO(b: BookX, tags: Map<number, number[]>) {
     pages: b.pages,
     fingerprint: b.fingerprint,
     addedAt: b.added_at,
-    progress: { page: b.progress_page, at: b.progress_at },
+    progress: { page: b.progress_page, at: b.progress_at, pos: b.progress_pos },
     tagIds: tags.get(b.id) ?? [],
     position: b.position,
   };
 }
+
+// ---------- comic folders ----------
+//
+// Folders are never stored as anything: this is derived from the index each time.
+//   group:  a folder with two or more comic files (.cbz / .zip) directly inside it. It is shown as one
+//           card named after the folder, with the cover of its first comic. Series and collections of
+//           one-shots are treated alike; opening it lists its comics alphabetically.
+//   single: a folder whose only content is one comic file (the layout Kavita requires). The wrapper folder
+//           disappears from the listing and the comic itself is shown.
+//   plain:  anything else, shown as an ordinary folder.
+
+interface DirInfo {
+  path: string;
+  name: string;
+  total: number;
+  kind: 'plain' | 'group' | 'single';
+  units: number;
+  done: number;
+  cover: { id: number; fingerprint: string } | null;
+  bookId: number | null;
+}
+
+type ComicRow = { id: number; dir: string; format: string; filename: string; fingerprint: string; pages: number | null; progress_page: number };
+
+function childDirs(parent: string): DirInfo[] {
+  const rows = (
+    parent === ''
+      ? db.prepare(`SELECT id, dir, format, filename, fingerprint, pages, progress_page FROM books WHERE missing = 0 AND dir != ''`).all()
+      : db
+          .prepare(`SELECT id, dir, format, filename, fingerprint, pages, progress_page FROM books WHERE missing = 0 AND dir LIKE ? ESCAPE '\\'`)
+          .all(likeEsc(parent) + '/%')
+  ) as ComicRow[];
+  const prefix = parent === '' ? '' : parent + '/';
+  const byChild = new Map<string, ComicRow[]>();
+  for (const r of rows) {
+    const first = r.dir.slice(prefix.length).split('/')[0];
+    const key = prefix + first;
+    let list = byChild.get(key);
+    if (!list) byChild.set(key, (list = []));
+    list.push(r);
+  }
+  const out: DirInfo[] = [];
+  for (const [p, list] of byChild) {
+    const direct = list.filter((r) => r.dir === p);
+    const comics = direct.filter((r) => r.format === 'cbz').sort((a, b) => natCompare(a.filename, b.filename));
+    let kind: DirInfo['kind'] = 'plain';
+    if (comics.length >= 2) kind = 'group';
+    else if (comics.length === 1 && list.length === 1) kind = 'single';
+    out.push({
+      path: p,
+      name: path.posix.basename(p),
+      total: list.length,
+      kind,
+      units: comics.length,
+      done: kind === 'group' ? comics.filter((c) => c.pages && c.progress_page >= c.pages).length : 0,
+      cover: kind === 'group' ? { id: comics[0].id, fingerprint: comics[0].fingerprint } : null,
+      bookId: kind === 'single' ? comics[0].id : null,
+    });
+  }
+  return out.sort((a, b) => natCompare(a.name, b.name));
+}
+
+app.get('/api/dirs', (req, res) => {
+  const parent = typeof req.query.parent === 'string' ? req.query.parent : '';
+  res.json(childDirs(parent));
+});
 
 // ---------- books: listing & search ----------
 
@@ -145,6 +215,11 @@ app.get('/api/books', (req, res) => {
         where.push(`(b.dir = ? OR b.dir LIKE ? ESCAPE '\\')`);
         params.push(dir, likeEsc(dir) + '/%');
       }
+    } else if (req.query.collapse === '1') {
+      // Also the lone comic inside each single-comic wrapper folder (see "comic folders").
+      const lone = childDirs(dir).filter((d) => d.kind === 'single').map((d) => d.path);
+      where.push(`(b.dir = ?${lone.length ? ` OR b.dir IN (${lone.map(() => '?').join(',')})` : ''})`);
+      params.push(dir, ...lone);
     } else {
       where.push('b.dir = ?');
       params.push(dir);
@@ -177,6 +252,13 @@ app.get('/api/books', (req, res) => {
   }
   if (req.query.untagged === '1') where.push('NOT EXISTS (SELECT 1 FROM book_tags bt WHERE bt.book_id = b.id)');
   if (req.query.recent === '1') where.push('b.progress_at IS NOT NULL');
+  // "Recently added": first indexed within the last N days, not counting the library's very first scan
+  // (everything found then would otherwise look new). A moved or renamed file keeps its original date.
+  const addedDays = qstr(req.query.added) ? toInt(qstr(req.query.added)) : 0;
+  if (addedDays > 0) {
+    where.push('b.added_at >= ? AND b.added_at > (SELECT MIN(added_at) FROM books)');
+    params.push(Date.now() - Math.min(addedDays, 3650) * 86_400_000);
+  }
 
   const list = qstr(req.query.list);
   if (list) {
@@ -236,21 +318,26 @@ app.get('/api/books/:id/info', async (req, res) => {
 
 // Directory tree with recursive counts, for the sidebar and folder browsing.
 app.get('/api/tree', (_req, res) => {
-  const rows = db.prepare('SELECT dir, COUNT(*) AS n FROM books WHERE missing = 0 GROUP BY dir').all() as Array<{ dir: string; n: number }>;
-  const nodes = new Map<string, { path: string; name: string; parent: string; direct: number; total: number }>();
+  const rows = db.prepare('SELECT dir, COUNT(*) AS n, MAX(progress_at) AS last_read FROM books WHERE missing = 0 GROUP BY dir').all() as Array<{ dir: string; n: number; last_read: number | null }>;
+  // lastRead = the most recent time any book in that folder (or below it) was read; the sidebar can sort by it.
+  const nodes = new Map<string, { path: string; name: string; parent: string; direct: number; total: number; lastRead: number | null }>();
   const ensure = (p: string) => {
     let node = nodes.get(p);
     if (!node) {
       const parent = path.posix.dirname(p) === '.' ? '' : path.posix.dirname(p);
-      node = { path: p, name: path.posix.basename(p), parent, direct: 0, total: 0 };
+      node = { path: p, name: path.posix.basename(p), parent, direct: 0, total: 0, lastRead: null };
       nodes.set(p, node);
     }
     return node;
   };
-  for (const { dir, n } of rows) {
+  for (const { dir, n, last_read } of rows) {
     if (dir === '') continue;
     const parts = dir.split('/');
-    for (let i = 1; i <= parts.length; i++) ensure(parts.slice(0, i).join('/')).total += n;
+    for (let i = 1; i <= parts.length; i++) {
+      const node = ensure(parts.slice(0, i).join('/'));
+      node.total += n;
+      if (last_read && (node.lastRead ?? 0) < last_read) node.lastRead = last_read;
+    }
     ensure(dir).direct = n;
   }
   const rootDirect = rows.find((r) => r.dir === '')?.n ?? 0;
@@ -307,6 +394,54 @@ app.get('/api/books/:id/pages/:n', async (req, res) => {
   stream.pipe(res);
 });
 
+// ---------- EPUB reading ----------
+// The reader shows each section (spine item) in a sandboxed iframe that points straight at these URLs,
+// so images, styles and fonts load by their own relative paths. Scripts inside books never run:
+// the iframe is sandboxed without allow-scripts and the CSP below forbids everything but passive content.
+
+const EPUB_CSP = "default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; media-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'";
+
+app.get('/api/books/:id/epub', async (req, res) => {
+  const book = getBook(req.params.id);
+  if (book.format !== 'epub') throw new HttpError(400, 'not an EPUB');
+  let st;
+  try {
+    st = await epubStructure(`${book.id}:${book.fingerprint}`, absPath(book));
+  } catch (e) {
+    throw new HttpError(422, `can't read this EPUB: ${(e as Error).message}`);
+  }
+  // The section count doubles as "pages" for progress bars.
+  if (book.pages !== st.spine.length) db.prepare('UPDATE books SET pages = ? WHERE id = ?').run(st.spine.length, book.id);
+  res.setHeader('Cache-Control', 'no-cache');
+  res.json({
+    title: st.title,
+    rtl: st.rtl,
+    spine: st.spine.map((s) => ({ path: s.path, size: s.size, kind: s.kind })),
+    toc: st.toc,
+  });
+});
+
+app.get('/api/books/:id/epub/f/*rest', async (req, res) => {
+  const book = getBook(req.params.id);
+  if (book.format !== 'epub') throw new HttpError(400, 'not an EPUB');
+  const parts = (req.params as unknown as { rest: string[] }).rest;
+  const name = parts.join('/');
+  const st = await epubStructure(`${book.id}:${book.fingerprint}`, absPath(book)).catch(() => null);
+  if (!st || !st.entries.has(name) || name.startsWith('META-INF/')) return res.status(404).type('text/plain').send('not in this book');
+  const ext = path.posix.extname(name).toLowerCase();
+  let type = EPUB_MIME[ext] ?? 'application/octet-stream';
+  if (req.query.html === '1' && type.startsWith('application/xhtml')) type = 'text/html; charset=utf-8'; // lenient fallback for sloppy XHTML
+  if (ext === '.js') type = 'text/plain; charset=utf-8'; // never executable
+  res.setHeader('Content-Type', type);
+  res.setHeader('Content-Security-Policy', EPUB_CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  cacheHeaders(req, res, book);
+  const { stream, size } = await openEntryStream(absPath(book), name);
+  res.setHeader('Content-Length', String(size));
+  stream.on('error', () => res.destroy());
+  stream.pipe(res);
+});
+
 // ---------- reading progress ----------
 
 app.put('/api/books/:id/progress', (req, res) => {
@@ -314,13 +449,16 @@ app.put('/api/books/:id/progress', (req, res) => {
   let page = toInt(req.body?.page);
   if (page < 1) page = 1;
   if (book.pages && page > book.pages) page = book.pages;
-  db.prepare('UPDATE books SET progress_page = ?, progress_at = ? WHERE id = ?').run(page, Date.now(), book.id);
-  res.json({ page });
+  // EPUB: where inside the section (0..1). Other formats don't send it.
+  const rawPos = req.body?.pos;
+  const pos = typeof rawPos === 'number' && Number.isFinite(rawPos) ? Math.min(1, Math.max(0, rawPos)) : null;
+  db.prepare('UPDATE books SET progress_page = ?, progress_pos = ?, progress_at = ? WHERE id = ?').run(page, pos, Date.now(), book.id);
+  res.json({ page, pos });
 });
 
 app.delete('/api/books/:id/progress', (req, res) => {
   const book = getBook(req.params.id);
-  db.prepare('UPDATE books SET progress_page = 0, progress_at = NULL WHERE id = ?').run(book.id);
+  db.prepare('UPDATE books SET progress_page = 0, progress_pos = NULL, progress_at = NULL WHERE id = ?').run(book.id);
   res.json({ ok: true });
 });
 
@@ -693,6 +831,54 @@ app.get('/api/storage', async (_req, res) => res.json(await storageStats()));
 // Books are identified by path AND content fingerprint, so it can be matched to files that were moved.
 // Highlights/notes/drawings are inside the PDFs and display settings are in the browser (the page
 // adds those to the file it downloads), so neither is in here.
+// ---------- display settings (kept in the shelf's own data so every browser agrees) ----------
+
+const SETTINGS_KEY = 'settings';
+type Settings = Record<string, string | number | boolean>;
+function readSettings(): Settings {
+  const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(SETTINGS_KEY) as { value: string } | undefined;
+  try {
+    const o = row ? JSON.parse(row.value) : {};
+    return o && typeof o === 'object' && !Array.isArray(o) ? o : {};
+  } catch {
+    return {};
+  }
+}
+const writeSettings = (o: Settings) =>
+  db.prepare('INSERT INTO kv (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(SETTINGS_KEY, JSON.stringify(o));
+
+/** Only plain, small values under sane names; the server doesn't need to know which settings exist. */
+function cleanSettings(body: unknown): Record<string, string | number | boolean | null> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new HttpError(400, 'expected an object of settings');
+  const out: Record<string, string | number | boolean | null> = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (!/^[A-Za-z][A-Za-z0-9]{0,40}$/.test(k)) throw new HttpError(400, `bad setting name "${k}"`);
+    if (v === null || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v)) || (typeof v === 'string' && v.length <= 100)) out[k] = v;
+    else throw new HttpError(400, `bad value for "${k}"`);
+  }
+  if (Object.keys(out).length > 80) throw new HttpError(400, 'too many settings');
+  return out;
+}
+
+app.get('/api/settings', (_req, res) => res.json(readSettings()));
+// Merge: a null value removes that key (back to its default).
+app.patch('/api/settings', (req, res) => {
+  const cur: Record<string, unknown> = readSettings();
+  for (const [k, v] of Object.entries(cleanSettings(req.body))) {
+    if (v === null) delete cur[k];
+    else cur[k] = v;
+  }
+  if (Object.keys(cur).length > 80) throw new HttpError(400, 'too many settings');
+  writeSettings(cur as Settings);
+  res.json(cur);
+});
+// Replace everything ({} resets all display settings).
+app.put('/api/settings', (req, res) => {
+  const next = Object.fromEntries(Object.entries(cleanSettings(req.body)).filter(([, v]) => v !== null)) as Settings;
+  writeSettings(next);
+  res.json(next);
+});
+
 app.get('/api/export', (_req, res) => {
   const iso = (ms: number | null) => (ms ? new Date(ms).toISOString() : null);
   const all = db.prepare('SELECT * FROM books ORDER BY path').all() as BookRow[];
@@ -722,6 +908,7 @@ app.get('/api/export', (_req, res) => {
     name: SHELF_NAME || undefined,
     tags: tagRows.map((t) => ({ name: t.name, color: t.color, books: all.filter((b) => tagsOf.get(b.id)?.includes(t.name)).length })),
     lists: listRows.map((l) => ({ name: l.name, createdAt: iso(l.created_at), books: listBooks.get(l.id) ?? [] })),
+    settings: readSettings(),
     programs: (db.prepare(READERS_SQL).all() as ReaderRow[]).map((r) => ({ name: r.name, command: r.command, scope: r.scope })),
     books: all.map((b) => ({
       path: b.path,
@@ -736,7 +923,7 @@ app.get('/api/export', (_req, res) => {
       ...(b.missing ? { missing: true } : {}),
       tags: tagsOf.get(b.id) ?? [],
       lists: inLists.get(b.id) ?? [],
-      progress: b.progress_page || b.progress_at ? { page: b.progress_page, at: iso(b.progress_at) } : null,
+      progress: b.progress_page || b.progress_at ? { page: b.progress_page, ...(b.progress_pos != null ? { pos: b.progress_pos } : {}), at: iso(b.progress_at) } : null,
     })),
   });
 });
@@ -766,6 +953,7 @@ app.get('/api/info', async (_req, res) => {
     .all() as Array<{ format: string; n: number }>;
   res.json({
     name: SHELF_NAME,
+    auth: AUTH_ON,
     libraryDir: LIBRARY_DIR,
     docker: IN_DOCKER,
     opener: IN_DOCKER ? !!OPENER_SOCKET && (await helperAlive(OPENER_SOCKET)) : true,
@@ -796,6 +984,8 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 const server = app.listen(PORT, HOST, () => {
   console.log(`shelf: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
   console.log(`library: ${LIBRARY_DIR}`);
+  if (AUTH_ON) console.log('pass key: required to open Shelf');
+  else if (!/^(127\.|localhost$|::1$)/.test(HOST)) console.warn(`WARNING: listening on ${HOST} with no pass key: anyone who can reach this port can read your books. Set SHELF_PASSKEY (or "passkey" in the shelf file).`);
   startScan();
 });
 

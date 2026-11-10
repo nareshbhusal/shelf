@@ -3,6 +3,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { XMLParser } from 'fast-xml-parser';
 import { usableAuthor, usableTitle } from './util.js';
+import { readEpubStructure } from './epub.js';
 import { imageNames, listEntries, readEntry } from './zip.js';
 
 const execFileP = promisify(execFile);
@@ -130,6 +131,12 @@ export async function epubInfo(file: string): Promise<{ meta: Meta; coverEntry?:
       /* keep raw */
     }
     coverEntry = path.posix.normalize(path.posix.join(base, decoded));
+  }
+  // Sections of the book; the reader and the progress bar count in these.
+  try {
+    meta.pages = (await readEpubStructure(file, false)).spine.length;
+  } catch {
+    /* unreadable structure: no count */
   }
   return { meta, coverEntry };
 }

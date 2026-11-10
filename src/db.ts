@@ -20,6 +20,7 @@ export interface BookRow {
   missing: number;
   progress_page: number;
   progress_at: number | null;
+  progress_pos: number | null; // EPUB: how far into the section (0..1)
 }
 
 // SQLite comes from Node itself (node:sqlite), not from a prebuilt native add-on. The add-on we used
@@ -109,7 +110,8 @@ CREATE TABLE IF NOT EXISTS books (
   added_at      INTEGER NOT NULL,
   missing       INTEGER NOT NULL DEFAULT 0,
   progress_page INTEGER NOT NULL DEFAULT 0,
-  progress_at   INTEGER
+  progress_at   INTEGER,
+  progress_pos  REAL
 );
 CREATE INDEX IF NOT EXISTS books_dir ON books(dir);
 CREATE INDEX IF NOT EXISTS books_fp ON books(fingerprint);
@@ -147,7 +149,16 @@ CREATE TABLE IF NOT EXISTS readers (
   position INTEGER NOT NULL DEFAULT 0,
   scope    TEXT NOT NULL DEFAULT 'books'
 );
+
+-- Small key/value store: display settings (key 'settings', JSON) live here instead of only in the browser.
+CREATE TABLE IF NOT EXISTS kv (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 `);
+if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'progress_pos')) {
+  db.exec('ALTER TABLE books ADD COLUMN progress_pos REAL');
+}
 // Older databases had one set of programs for both; keep every program available for both kinds.
 if (!(db.prepare('PRAGMA table_info(readers)').all() as Array<{ name: string }>).some((c) => c.name === 'scope')) {
   db.exec("ALTER TABLE readers ADD COLUMN scope TEXT NOT NULL DEFAULT 'books'");
@@ -155,4 +166,4 @@ if (!(db.prepare('PRAGMA table_info(readers)').all() as Array<{ name: string }>)
 }
 // Highlights/notes are stored inside the PDFs themselves, never here. (Earlier dev builds had a table for them.)
 db.exec('DROP TABLE IF EXISTS annotations');
-db.pragma('user_version = 4');
+db.pragma('user_version = 6');

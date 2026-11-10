@@ -47,9 +47,11 @@ export const HOST_LIBRARY = process.env.SHELF_HOST_LIBRARY ?? '';
 // SHELF_READONLY=1 turns even that off: books are then strictly read-only (annotations still display).
 export const READONLY = spec ? spec.readonly : process.env.SHELF_READONLY === '1';
 
-// No auth in this version, so listen on localhost only unless told otherwise.
+// Localhost only unless told otherwise. If you open it to your network (HOST=0.0.0.0), set a pass key.
 export const PORT = spec?.port ?? Number(process.env.PORT ?? 4321);
-export const HOST = process.env.HOST ?? '127.0.0.1';
+export const HOST = spec?.host ?? process.env.HOST ?? '127.0.0.1';
+/** Optional pass key. Empty = no login. From the shelf file ("passkey") or SHELF_PASSKEY. Never logged or exported. */
+export const PASSKEY = spec?.passkey ?? process.env.SHELF_PASSKEY ?? '';
 
 export const EXT_FORMAT: Record<string, Format> = {
   '.pdf': 'pdf',

@@ -28,6 +28,8 @@ export interface ShelfSpec {
   data: string; // absolute
   dataImplied: boolean; // "data" was not written in the file; it defaults to <file's folder>/shelf-data
   port?: number;
+  host?: string; // address to listen on; default 127.0.0.1 (this computer only)
+  passkey?: string; // optional pass key for the login page
   readonly: boolean;
   requireMount: string[]; // absolute
 }
@@ -38,7 +40,7 @@ export interface Report {
   info: string[];
 }
 
-const KNOWN = new Set(['name', 'library', 'data', 'port', 'readonly', 'requireMount']);
+const KNOWN = new Set(['name', 'library', 'data', 'port', 'host', 'passkey', 'readonly', 'requireMount']);
 const BOOK_EXT = new Set(['.pdf', '.epub', '.cbz', '.zip']);
 
 const expandHome = (p: string) => (p === '~' ? os.homedir() : p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
@@ -84,6 +86,16 @@ export function readShelfFile(file: string): ShelfSpec {
     if (typeof o.port !== 'number' || !Number.isInteger(o.port) || o.port < 1 || o.port > 65535) throw new ShelfFileError(`${abs}: "port" must be a whole number from 1 to 65535`);
     port = o.port;
   }
+  let host: string | undefined;
+  if (o.host !== undefined) {
+    if (typeof o.host !== 'string' || !o.host.trim()) throw new ShelfFileError(`${abs}: "host" must be an address such as "127.0.0.1" or "0.0.0.0"`);
+    host = o.host.trim();
+  }
+  let passkey: string | undefined;
+  if (o.passkey !== undefined) {
+    if (typeof o.passkey !== 'string') throw new ShelfFileError(`${abs}: "passkey" must be text`);
+    passkey = o.passkey || undefined;
+  }
   if (o.readonly !== undefined && typeof o.readonly !== 'boolean') throw new ShelfFileError(`${abs}: "readonly" must be true or false`);
   let mounts: string[] = [];
   if (o.requireMount !== undefined) {
@@ -103,6 +115,8 @@ export function readShelfFile(file: string): ShelfSpec {
     data: dataRaw ? resolveIn(dir, dataRaw) : path.join(dir, 'shelf-data'),
     dataImplied: !dataRaw,
     port,
+    host,
+    passkey,
     readonly: o.readonly === true,
     requireMount: mounts,
   };
@@ -227,6 +241,10 @@ export function checkShelf(spec: ShelfSpec): Report {
   const unknown = unknownKeys(spec.file);
   if (unknown.length) r.warnings.push(`Unknown key${unknown.length > 1 ? 's' : ''} in the shelf file (typo?): ${unknown.join(', ')}`);
   if (spec.dataImplied) r.info.push(`No "data" in the shelf file: using ${spec.data} (next to the file).`);
+
+  const open = spec.host && !/^(127\.|localhost$|\[?::1\]?$)/.test(spec.host);
+  if (spec.passkey) r.info.push('Pass key: set (login required).' + (spec.passkey.length < 6 ? ' It is short; a longer one is harder to guess.' : ''));
+  else if (open) r.warnings.push(`"host" is ${spec.host}, so other computers on the network can reach Shelf, and there is no "passkey". Anyone who can reach the port can read your books.`);
 
   // 1. mounts first: if a drive is locked nothing below means anything
   for (const m of spec.requireMount) {
