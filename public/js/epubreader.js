@@ -99,7 +99,8 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
 
   // ---------------------------------------------------------------- styling of the book's pages
   function css() {
-    const paper = document.documentElement.dataset.readerBg === 'paper';
+    const ds = document.documentElement.dataset;
+    const paper = ds.readerBg === 'paper' || (ds.readerBg === 'theme' && (ds.theme === 'light' || ds.theme === 'sepia'));
     const fg = paper ? '#26231d' : '#d8dbe2';
     const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#6c8cff';
     const link = paper ? '#2b57c9' : accent;

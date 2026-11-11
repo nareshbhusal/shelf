@@ -1,8 +1,9 @@
 import { api, coverUrl, fileUrl } from './api.js';
-import { refreshMeta, store, tagById } from './store.js';
+import { booksChanged, refreshMeta, store, tagById } from './store.js';
 import { confirmDialog, modal, toast } from './ui.js';
 import { bookName } from './settings.js';
 import { openWithMenu } from './openwith.js';
+import { openRename } from './rename.js';
 import { dirSegments, fmtBytes, h, hashFor, icon, initials, hueOf, isFinished, progressText, tagColor } from './util.js';
 
 export const chip = (tag) =>
@@ -236,7 +237,8 @@ export async function openBookInfo(book, { onChange } = {}) {
     h('button', { class: 'btn', onClick: () => openListPicker([book], { onChange }) }, icon('list', 15), 'Lists'),
     h('button', { class: 'btn', onClick: (e) => openWithMenu(e.currentTarget, { bookIds: [book.id] }, 1) }, icon('external', 15), 'Open with…'),
     h('a', { class: 'btn', href: fileUrl(book, true) }, 'Download'),
-  ];
+    store.info?.readOnly ? null : h('button', { class: 'btn', onClick: () => (m.close(), openRename([book], { onDone: () => (refreshMeta(), booksChanged()) })) }, icon('edit', 15), 'Rename…'),
+  ].filter(Boolean);
 
   const body = h(
     'div',

@@ -6,21 +6,27 @@ const modalRoot = () => document.getElementById('modal-root');
  * A message that stays long enough to read, can be selected and copied, and doesn't vanish while
  * the pointer is over it or text inside it is selected.
  */
-export function toast(msg, kind = '') {
+export function toast(msg, kind = '', { action } = {}) {
   let timer;
   const dismiss = () => {
     clearTimeout(timer);
     el.classList.add('out');
     setTimeout(() => el.remove(), 350);
   };
-  const el = h('div', { class: `toast ${kind}` }, h('span', { class: 'toast-text' }, msg), h('button', { class: 'toast-x', title: 'Dismiss', onClick: dismiss }, '×'));
+  const el = h(
+    'div',
+    { class: `toast ${kind}` },
+    h('span', { class: 'toast-text' }, msg),
+    action ? h('button', { class: 'toast-act', onClick: () => (dismiss(), action.onClick()) }, action.label) : null,
+    h('button', { class: 'toast-x', title: 'Dismiss', onClick: dismiss }, '×'),
+  );
   const holding = () => {
     if (el.matches(':hover')) return true;
     const sel = getSelection();
     return !!sel && !sel.isCollapsed && el.contains(sel.anchorNode);
   };
   // 'quiet': a brief confirmation (Undid, Copied) that never gets in the way of clicks.
-  const ms = kind === 'quiet' ? 1600 : Math.max(3000, kind === 'error' ? 6000 : 0, String(msg).length * 60);
+  const ms = kind === 'quiet' ? 1600 : Math.max(3000, kind === 'error' ? 6000 : 0, action ? 10000 : 0, String(msg).length * 60);
   const arm = () => {
     clearTimeout(timer);
     timer = setTimeout(() => (holding() ? arm() : dismiss()), ms);

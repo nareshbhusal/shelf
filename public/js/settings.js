@@ -55,7 +55,10 @@ const SCHEMA = [
   {
     group: 'Reader',
     items: [
-      { key: 'readerBg', label: 'Background', type: 'select', options: [['black', 'Black'], ['dark', 'Dark'], ['gray', 'Gray'], ['paper', 'Paper']], default: 'dark' },
+      { key: 'readerBg', label: 'Background', type: 'select', options: [['theme', 'Match theme'], ['black', 'Black'], ['dark', 'Dark'], ['gray', 'Gray'], ['paper', 'Paper']], default: 'theme' },
+      { key: 'modePdf', label: 'PDF reading mode', type: 'select', options: [['scroll', 'Continuous scroll'], ['paged', 'One page at a time (horizontal)']], default: 'scroll' },
+      { key: 'modeComic', label: 'Comic reading mode', type: 'select', options: [['scroll', 'Continuous scroll'], ['paged', 'One page at a time (horizontal)']], default: 'scroll' },
+      { key: 'rtlComic', label: 'Comic page order (one page at a time)', type: 'select', options: [['ltr', 'Left to right'], ['rtl', 'Right to left (manga)']], default: 'ltr' },
       { key: 'pdfWidth', label: 'PDF page width', type: 'range', min: 400, max: 2000, step: 50, unit: 'px', default: 900 },
       { key: 'comicWidth', label: 'Comic page width', type: 'range', min: 300, max: 1800, step: 50, unit: 'px', default: 900 },
       { key: 'epubWidth', label: 'EPUB text width', type: 'range', min: 400, max: 1200, step: 20, unit: 'px', default: 720 },

@@ -29,7 +29,7 @@
 # Shelf files: one small JSON file that says where a library and its data live. Nothing is
 # remembered anywhere else (no ~/.config entry), so an encrypted library can carry its own.
 #   ./shelf.sh init ~/mounted/shelf.json --library ~/mounted/books [--data DIR] [--port N] [--name TEXT] [--host ADDR] [--passkey KEY]
-#                                              [--readonly] [--require-mount ~/mounted]
+#                                              [--readonly] [--require-mount ~/mounted] [--ignore FOLDER]...
 #   ./shelf.sh check ~/mounted/shelf.json      checks the pieces (folders, mounts, data matches library, port)
 #   ./shelf.sh native ~/mounted/shelf.json     checks, then runs. Paths in the file may be absolute, ~/ or
 #                                              relative to the file. (Native only for now, not Docker.)
@@ -311,7 +311,7 @@ find_shelf_file() { local a; for a in "$@"; do case "$a" in -*) ;; *) if [ -f "$
 cmd_check() { [ $# -ge 1 ] || die "usage: ./shelf.sh check SHELF_FILE"; need_node; exec node_modules/.bin/tsx src/shelfcli.ts check "$(abspath "$1")"; }
 
 cmd_init() {
-  [ $# -ge 1 ] || die "usage: ./shelf.sh init SHELF_FILE --library DIR [--data DIR] [--port N] [--name TEXT] [--host ADDR] [--passkey KEY] [--readonly] [--require-mount DIR]"
+  [ $# -ge 1 ] || die "usage: ./shelf.sh init SHELF_FILE --library DIR [--data DIR] [--port N] [--name TEXT] [--host ADDR] [--passkey KEY] [--readonly] [--require-mount DIR] [--ignore FOLDER]..."
   need_node
   local f; f="$(abspath "$1")"; shift
   (cd "$ORIG_PWD" && exec "$SHELF_DIR/node_modules/.bin/tsx" "$SHELF_DIR/src/shelfcli.ts" init "$f" "$@")

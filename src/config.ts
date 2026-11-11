@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkShelf, printReport, readShelfFile, type ShelfSpec } from './shelffile.js';
+import { checkShelf, ignoreRules, printReport, readShelfFile, ShelfFileError, type ShelfSpec } from './shelffile.js';
 
 export type Format = 'pdf' | 'epub' | 'cbz';
 
@@ -29,6 +29,16 @@ if (process.env.SHELF_FILE) {
 export const SHELF_NAME = spec?.name ?? process.env.SHELF_NAME ?? '';
 export const LIBRARY_DIR = spec?.library ?? path.resolve(process.env.LIBRARY_DIR ?? path.join(ROOT, 'library'));
 export const DATA_DIR = spec?.data ?? path.resolve(process.env.DATA_DIR ?? path.join(ROOT, 'data'));
+/** Folders the scan skips (shelf file "ignore", or SHELF_IGNORE with entries separated by ":"). */
+export const IGNORE: string[] = (() => {
+  if (spec) return spec.ignore;
+  try {
+    return ignoreRules(LIBRARY_DIR, (process.env.SHELF_IGNORE ?? '').split(':'));
+  } catch (e) {
+    console.error(`Shelf: ${e instanceof ShelfFileError ? e.message : e}`);
+    process.exit(1);
+  }
+})();
 export const THUMB_DIR = path.join(DATA_DIR, 'thumbs');
 /** Scratch space. Everything Shelf writes outside the library goes under DATA_DIR, never the system /tmp. */
 export const TMP_DIR = path.join(DATA_DIR, 'tmp');

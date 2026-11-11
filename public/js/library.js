@@ -1,6 +1,7 @@
 import { api, coverUrl, fileUrl } from './api.js';
 import { chip, openBookInfo, openListPicker, openTagPicker } from './dialogs.js';
 import { openWithMenu, readerMenuItems } from './openwith.js';
+import { openRename } from './rename.js';
 import { bookName, onSettings, setSetting, settings, SORTS } from './settings.js';
 import { booksChanged, events, refreshMeta, store, subscribe, tagById } from './store.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
@@ -54,6 +55,7 @@ export function createLibraryView(route) {
   const isAdded = ctx.kind === 'added';
   let listSort = 'manual'; // lists default to the order you arranged; this isn't a global setting
   let books = [];
+  let series = null; // the folder being viewed, when it is a series: {parts, next, state, done, fraction}
   let dirInfo = new Map(); // child folder path -> {kind: plain|group|single, ...} (files view only)
   let loaded = false;
   let dead = false;
@@ -89,6 +91,13 @@ export function createLibraryView(route) {
     try {
       const [data, dirs] = await Promise.all([api.get('/books?' + p), folders ? api.get('/dirs?parent=' + encodeURIComponent(ctx.dir)) : []]);
       if (dead || seq !== reqSeq) return;
+      // A folder with 2+ comics is a series: ask where to carry on reading from.
+      let ser = null;
+      if (ctx.kind === 'files' && route.query.get('r') !== '1' && ctx.dir !== '' && data.filter((b) => b.format === 'cbz').length >= 2) {
+        ser = await api.get('/series?dir=' + encodeURIComponent(ctx.dir)).catch(() => null);
+        if (dead || seq !== reqSeq) return;
+      }
+      series = ser;
       books = data;
       dirInfo = new Map(dirs.map((d) => [d.path, d]));
       loaded = true;
@@ -229,6 +238,7 @@ export function createLibraryView(route) {
       h('button', { class: 'btn small', onClick: () => openTagPicker(picked(), { onChange: afterEdit(picked) }) }, icon('tag', 14), 'Tag'),
       h('button', { class: 'btn small', onClick: () => openListPicker(picked(), { onChange: afterEdit(picked) }) }, icon('list', 14), 'Add to list'),
       h('button', { class: 'btn small', onClick: (e) => openWithMenu(e.currentTarget, { bookIds: [...selected] }, selected.size) }, icon('external', 14), 'Open with…'),
+      canRename() ? h('button', { class: 'btn small', onClick: () => openRename(picked(), { onDone: afterRename }) }, icon('edit', 14), 'Rename…') : null,
       isList
         ? h(
             'button',
@@ -267,6 +277,13 @@ export function createLibraryView(route) {
     syncSelection();
   }
 
+  const canRename = () => !store.info?.readOnly;
+  const afterRename = () => {
+    selected.clear();
+    syncSelection();
+    refreshMeta();
+    booksChanged(); // reload: names (and so order) changed
+  };
   const afterEdit = (getBooks) => () => {
     for (const b of getBooks()) replaceCard(b);
     if (ctx.kind === 'all' && (route.query.get('tags') || route.query.get('untagged'))) load();
@@ -322,6 +339,7 @@ export function createLibraryView(route) {
             { label: 'Details', onClick: () => openBookInfo(book, { onChange: () => { replaceCard(book); } }) },
             { label: 'Tags…', onClick: () => openTagPicker([book], { onChange: afterEdit(() => [book]) }) },
             { label: 'Add to reading list…', onClick: () => openListPicker([book], { onChange: afterEdit(() => [book]) }) },
+            canRename() ? { label: 'Rename…', onClick: () => openRename([book], { onDone: afterRename }) } : null,
             ...readerMenuItems({ bookIds: [book.id] }, 1),
             { label: 'Download', onClick: () => (location.href = fileUrl(book, true)) },
           ].filter(Boolean));
@@ -384,7 +402,7 @@ export function createLibraryView(route) {
   /** A folder holding 2+ comics: one card, named after the folder, covered by its first comic. */
   function groupCard(d, info) {
     const rec = route.query.get('r') === '1';
-    const pct = info.units ? Math.round((info.done / info.units) * 100) : 0;
+    const pct = Math.floor((info.fraction ?? 0) * 100);
     const img = h('img', { loading: 'lazy', decoding: 'async', alt: '', draggable: false });
     img.src = coverUrl(info.cover);
     img.addEventListener('error', () => img.remove());
@@ -422,7 +440,7 @@ export function createLibraryView(route) {
           pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null,
         ),
       ),
-      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${plural(info.units, 'comic')}${info.done ? `, ${info.done} read` : ''}`)),
+      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${plural(info.units, 'comic')}${info.done ? `, ${info.done} read` : pct ? `, ${pct}%` : ''}`)),
     );
   }
 
@@ -481,6 +499,7 @@ export function createLibraryView(route) {
 
     const items = [];
     if (isAdded) items.push(addedNote());
+    const panel = series ? seriesPanel() : null;
     if (ctx.kind === 'files' && route.query.get('r') !== '1') {
       const dir = route.rest.join('/');
       for (const d of store.tree.dirs.filter((x) => x.parent === dir)) {
@@ -500,11 +519,32 @@ export function createLibraryView(route) {
     } else if (!items.length) {
       content.replaceChildren(emptyState());
     } else {
-      content.replaceChildren(h('div', { class: 'grid' }, items));
+      content.replaceChildren(...(panel ? [panel] : []), h('div', { class: 'grid' }, items));
     }
     root.classList.toggle('selecting', selected.size > 0);
     renderSelBar();
     if (scroller && keepY) scroller.scrollTop = keepY;
+  }
+
+  /** A folder of 2+ comics: one button to read it from where you left off, straight through all its parts. */
+  function seriesPanel() {
+    const s = series;
+    const next = s.parts.find((p) => p.id === s.next);
+    const pct = Math.floor(s.fraction * 100);
+    const label = s.state === 'new' ? 'Read' : s.state === 'done' ? 'Read again' : 'Continue';
+    const where = s.state === 'reading' && next ? ` · ${bookName(next)}${next.progress.page > 1 && !(next.pages && next.progress.page >= next.pages) ? `, page ${next.progress.page}` : ''}` : '';
+    return h(
+      'div',
+      { class: 'series-panel' },
+      h('a', { class: 'btn primary', href: hashFor('read', [String(s.state === 'done' ? s.parts[0].id : s.next)]), title: 'Opens the reader; the next part follows on without a break' }, icon('play', 14), label),
+      canRename() ? h('button', { class: 'btn', title: 'Rename all parts of this series with find & replace, numbering and more', onClick: () => openRename(s.parts, { onDone: afterRename }) }, icon('edit', 14), 'Rename parts…') : null,
+      h(
+        'div',
+        { class: 'series-info' },
+        h('div', null, h('strong', null, plural(s.parts.length, 'part')), h('span', { class: 'muted' }, ` · ${s.done} finished · ${pct}% read${where}`)),
+        h('div', { class: 'series-bar', title: `${pct}% of the whole series` }, h('i', { style: { width: `${pct}%` } })),
+      ),
+    );
   }
 
   /** The rule for this page, stated on the page itself. */

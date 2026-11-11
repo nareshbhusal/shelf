@@ -32,6 +32,8 @@ export interface ShelfSpec {
   passkey?: string; // optional pass key for the login page
   readonly: boolean;
   requireMount: string[]; // absolute
+  /** Folders the scan skips: a bare name (any folder with that name) or a library-relative path. See ignoreRules(). */
+  ignore: string[];
 }
 
 export interface Report {
@@ -40,13 +42,36 @@ export interface Report {
   info: string[];
 }
 
-const KNOWN = new Set(['name', 'library', 'data', 'port', 'host', 'passkey', 'readonly', 'requireMount']);
+const KNOWN = new Set(['name', 'library', 'data', 'port', 'host', 'passkey', 'readonly', 'requireMount', 'ignore']);
 const BOOK_EXT = new Set(['.pdf', '.epub', '.cbz', '.zip']);
 
 const expandHome = (p: string) => (p === '~' ? os.homedir() : p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
 
 export function resolveIn(base: string, p: string): string {
   return path.resolve(base, expandHome(p));
+}
+
+/**
+ * Turns the entries of an "ignore" list into rules the scanner can use. Each entry is a folder:
+ *   "Samples"          a bare name: every folder called that, at any depth
+ *   "Manga/Old"        a path, relative to the library: just that folder (and everything in it)
+ *   "/full/path/..."   an absolute path (or ~/...), which must lie inside the library
+ * Names are case-sensitive and a trailing slash doesn't matter.
+ */
+export function ignoreRules(library: string, entries: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of entries) {
+    let e = raw.trim().replace(/[\\/]+$/, '');
+    if (!e) continue;
+    if (e === '~' || e.startsWith('~/') || path.isAbsolute(e)) {
+      const rel = path.relative(library, path.resolve(expandHome(e)));
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) throw new ShelfFileError(`"ignore": ${raw} is not inside the library ${library}`);
+      e = rel;
+    }
+    e = e.split(path.sep).join('/').replace(/^\.\//, '');
+    out.push(e);
+  }
+  return out;
 }
 
 export function readShelfFile(file: string): ShelfSpec {
@@ -105,6 +130,14 @@ export function readShelfFile(file: string): ShelfSpec {
     mounts = (arr as string[]).map((m) => resolveIn(dir, m.trim()));
   }
 
+  let ignore: string[] = [];
+  if (o.ignore !== undefined) {
+    const v = o.ignore;
+    const arr = typeof v === 'string' ? [v] : v;
+    if (!Array.isArray(arr) || arr.some((x) => typeof x !== 'string' || !x.trim())) throw new ShelfFileError(`${abs}: "ignore" must be a folder or a list of folders`);
+    ignore = ignoreRules(resolveIn(dir, lib), arr as string[]);
+  }
+
   return {
     file: abs,
     dir,
@@ -119,6 +152,7 @@ export function readShelfFile(file: string): ShelfSpec {
     passkey,
     readonly: o.readonly === true,
     requireMount: mounts,
+    ignore,
   };
 }
 
@@ -265,6 +299,13 @@ export function checkShelf(spec: ShelfSpec): Report {
     }
   } catch {
     r.errors.push(`library ${spec.library} does not exist.`);
+  }
+
+  // 2b. ignored folders: a path that matches nothing is usually a typo (bare names can match nothing legitimately)
+  if (libOk && spec.ignore.length) {
+    const gone = spec.ignore.filter((e) => e.includes('/') && !fs.existsSync(path.join(spec.library, e)));
+    r.info.push(`Ignoring ${spec.ignore.length} folder${spec.ignore.length === 1 ? '' : 's'}: ${spec.ignore.join(', ')}`);
+    for (const g of gone) r.warnings.push(`ignore: ${g} doesn't exist in the library (typo, or not mounted?).`);
   }
 
   // 3. data folder: may be created, but never its missing parent (that would write to the wrong disk)

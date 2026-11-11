@@ -9,6 +9,7 @@ import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
 import { EPUB_MIME, epubStructure } from './epub.js';
 import { pdfDetails, toolsAvailable } from './meta.js';
+import { applyRename, planRename, RenameError } from './rename.js';
 import { purgeMissing, scanState, startScan } from './scanner.js';
 import {
   addAnnotation as addNote,
@@ -151,11 +152,24 @@ interface DirInfo {
   kind: 'plain' | 'group' | 'single';
   units: number;
   done: number;
+  fraction: number; // 0..1 of the whole series, counted in pages (a finished part counts in full)
   cover: { id: number; fingerprint: string } | null;
   bookId: number | null;
 }
 
 type ComicRow = { id: number; dir: string; format: string; filename: string; fingerprint: string; pages: number | null; progress_page: number };
+
+/** How far through a set of comics you are: pages read over pages in total (parts without a known length count by part). */
+function seriesFraction(comics: Array<{ pages: number | null; progress_page: number }>): number {
+  let read = 0;
+  let all = 0;
+  for (const c of comics) {
+    const n = c.pages && c.pages > 0 ? c.pages : 1;
+    all += n;
+    read += c.pages ? Math.min(c.progress_page, n) : c.progress_page > 0 ? 1 : 0;
+  }
+  return all ? read / all : 0;
+}
 
 function childDirs(parent: string): DirInfo[] {
   const rows = (
@@ -188,6 +202,7 @@ function childDirs(parent: string): DirInfo[] {
       kind,
       units: comics.length,
       done: kind === 'group' ? comics.filter((c) => c.pages && c.progress_page >= c.pages).length : 0,
+      fraction: kind === 'group' ? seriesFraction(comics) : 0,
       cover: kind === 'group' ? { id: comics[0].id, fingerprint: comics[0].fingerprint } : null,
       bookId: kind === 'single' ? comics[0].id : null,
     });
@@ -198,6 +213,44 @@ function childDirs(parent: string): DirInfo[] {
 app.get('/api/dirs', (req, res) => {
   const parent = typeof req.query.parent === 'string' ? req.query.parent : '';
   res.json(childDirs(parent));
+});
+
+// The parts of a series (a "group" folder): its comics in reading order, and where to carry on from.
+// The reader uses the same list to read from one part straight into the next.
+app.get('/api/series', (req, res) => {
+  const dir = typeof req.query.dir === 'string' ? req.query.dir : '';
+  const rows = (dir === '' ? [] : db.prepare(`SELECT * FROM books WHERE missing = 0 AND dir = ? AND format = 'cbz'`).all(dir)) as BookX[];
+  if (rows.length < 2) throw new HttpError(404, 'not a series');
+  rows.sort((a, b) => natCompare(a.filename, b.filename));
+  const isDone = (r: BookX) => !!r.pages && r.progress_page >= r.pages;
+  const started = rows.filter((r) => r.progress_at !== null);
+  let next = rows[0];
+  let state: 'new' | 'reading' | 'done' = 'new';
+  if (started.length) {
+    const last = started.reduce((a, b) => ((b.progress_at ?? 0) > (a.progress_at ?? 0) ? b : a));
+    if (!isDone(last)) {
+      next = last;
+      state = 'reading';
+    } else {
+      const after = rows.slice(rows.indexOf(last) + 1).find((r) => !isDone(r)) ?? rows.find((r) => !isDone(r));
+      if (after) {
+        next = after;
+        state = 'reading';
+      } else {
+        state = 'done'; // everything read: "read again" starts at the first part
+      }
+    }
+  }
+  const tags = tagMap();
+  res.json({
+    dir,
+    name: path.posix.basename(dir),
+    parts: rows.map((r) => bookDTO(r, tags)),
+    next: next.id,
+    state,
+    done: rows.filter(isDone).length,
+    fraction: seriesFraction(rows),
+  });
 });
 
 // ---------- books: listing & search ----------
@@ -440,6 +493,33 @@ app.get('/api/books/:id/epub/f/*rest', async (req, res) => {
   res.setHeader('Content-Length', String(size));
   stream.on('error', () => res.destroy());
   stream.pipe(res);
+});
+
+// ---------- renaming files ----------
+//
+// The only change Shelf makes to the library besides saving PDF notes (see rename.ts for the rules).
+// Send {items: [{id, name}]}; `name` has no extension. With dryRun the answer says what would happen.
+app.post('/api/rename', async (req, res) => {
+  if (READONLY) throw new HttpError(403, 'Shelf is in read-only mode, so it will not rename files.');
+  const raw = req.body?.items;
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 5000) throw new HttpError(400, 'items: 1 to 5000 books expected');
+  const items = raw.map((r) => {
+    if (!r || typeof r.name !== 'string') throw new HttpError(400, 'each item needs an id and a name');
+    return { id: toInt(r.id), name: r.name };
+  });
+  const dry = req.body?.dryRun === true;
+  if (!dry && scanState.running) throw new HttpError(409, 'Shelf is scanning the library right now. Try again in a moment.');
+  const plans = await planRename(items);
+  if (dry) return void res.json({ plans });
+  const bad = plans.filter((p) => p.error);
+  if (bad.length) return void res.status(409).json({ error: `${bad.length} name(s) can't be used; nothing was renamed.`, plans });
+  try {
+    const renamed = await applyRename(plans);
+    res.json({ renamed, plans });
+  } catch (e) {
+    if (e instanceof RenameError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
 });
 
 // ---------- reading progress ----------

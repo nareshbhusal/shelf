@@ -18,7 +18,7 @@ compose plugin:
 ./shelf.sh start ~/Documents/Books     # builds, starts, remembers the folder
 # open http://localhost:4321
 ./shelf.sh stop | restart | logs | status | list
-./shelf.sh start --readonly            # Shelf may never write to your books (no saving of highlights)
+./shelf.sh start --readonly            # Shelf may never write to your books (no saving of highlights, no renaming)
 ```
 
 Docker needs `sudo apt install docker.io` once. If your user isn't in the `docker` group the script
@@ -74,7 +74,8 @@ small JSON file that sits inside the drive, and nothing else remembers it:
 
 ```json
 { "name": "private", "library": "books", "data": "shelf-data", "port": 4322, "readonly": false,
-  "passkey": "a long phrase", "host": "0.0.0.0", "requireMount": ["/home/you/mounted_decrypted"] }
+  "passkey": "a long phrase", "host": "0.0.0.0", "requireMount": ["/home/you/mounted_decrypted"],
+  "ignore": ["Samples"] }
 ```
 
 ```bash
@@ -84,10 +85,20 @@ small JSON file that sits inside the drive, and nothing else remembers it:
 ```
 
 - Paths may be absolute, start with `~/`, or be relative to the folder holding the file, so the whole
-  folder can be mounted somewhere else and still work. Only `library` is required. If `data` is left
+  folder can be mounted somewhere else and still work. `init` writes a full path (or `~/...`) exactly
+  as you typed it; only a relative path you give it is stored relative to the file's folder (when it is
+  inside it). Only `library` is required. If `data` is left
   out it is `shelf-data` next to the file, never a global folder. `name` is shown in the sidebar and tab
   title (handy with several instances); `requireMount` lists mount points that must really be mounted;
   `passkey` and `host` are described under "Pass key" below (`init` takes `--passkey` and `--host`).
+- `ignore` (one folder, or a list) keeps folders out of the library: `"ignore": ["Samples", "Manga/Old scans",
+  "@eaDir"]`. A bare name skips every folder with that name at any depth; a path is relative to the
+  library (an absolute or `~/` path must lie inside it) and skips just that folder and everything below
+  it. Names are case-sensitive. `init` takes `--ignore FOLDER` (repeat it); outside a shelf file,
+  `SHELF_IGNORE` takes the same entries separated by `:`. Books already indexed from a folder you then
+  ignore are treated like deleted files (they show as missing and go on the next cleanup, taking their
+  tags and progress with them); take the folder off the list before cleaning up and they come back
+  with everything intact. `check` prints what is ignored and warns about a path that doesn't exist.
 - Before anything starts, the file is checked: valid JSON and known keys (typos are flagged), the library
   exists, is readable, is writable (unless `readonly`) and contains books, mounts are real mounts, the data
   folder is usable (a missing *parent* is refused, because creating it would write to the wrong disk), the
@@ -121,7 +132,7 @@ frontend, `./shelf.sh native` is faster: edit, refresh the browser, no rebuild.
 | `PORT`            | `4321`        | Port                                                      |
 | `HOST`            | `127.0.0.1`   | Bind address. `0.0.0.0` opens it to your network: set a pass key |
 | `SHELF_PASSKEY`   | none          | Require this pass key to open Shelf (see "Pass key")      |
-| `SHELF_READONLY`  | off           | `1`: never write into the library (no saving highlights)  |
+| `SHELF_READONLY`  | off           | `1`: never write into the library (no saving highlights, no renaming) |
 | `SHELF_ALLOWED_HOSTS` | none      | Extra host names allowed in the Host header (reverse proxies) |
 
 ## Pass key
@@ -173,6 +184,17 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   shown itself. Everything else stays an ordinary folder, and "Subfolders" shows the flat list. The card's
   menu can tag, or add to a reading list, all of its comics at once. Settings > Library > "Folders with
   several comics as one card" turns this off. Folders of loose image files (no archive) are not indexed yet.
+- **Reading a series.** Open such a folder and the panel at the top has a **Read** button (**Continue**
+  once you've started, **Read again** when everything is read). It opens the part you left off at (the
+  last-read part if unfinished, otherwise the next unfinished one). In the reader the parts run on
+  without a break: the next part is attached below as you approach the end of one, the previous part above
+  you as you approach its start, each introduced by a small heading. The top bar shows "Part 3/12" with
+  previous/next-part buttons (`<` `>` keys), and the thin progress line at the bottom is the progress
+  through the *whole series*, with a tick where each part begins. Every part keeps its own reading
+  progress (so the library, "continue" and the folder card keep working): reading a part to its end
+  marks it finished; passing through one quickly (scrolling fast, jumping) saves nothing for it. The
+  card and panel percentage counts pages across the whole series. Parts are ordered by file name
+  (natural order: `v2` before `v10`).
 - **Recently added** (sidebar) lists books Shelf first found in the last 7 / 30 / 90 days or year (your
   choice, saved). The date is when Shelf first indexed the file, not the file's modified date; the first
   scan of a library is the starting point and doesn't count; moving, renaming or editing a file keeps its
@@ -180,8 +202,19 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
 - **Names**: cards show the file name by default; Settings > "Show names from" switches to the
   title found inside the file. Sorting follows the choice. The browser tab title says what you are
   reading and on which page.
-- **Select** books (checkbox on hover, shift-click for ranges, Ctrl+A) then **Tag**, **Add to list**
-  or **Open with**. Type a new name to create a tag or list on the spot.
+- **Select** books (checkbox on hover, shift-click for ranges, Ctrl+A) then **Tag**, **Add to list**,
+  **Open with** or **Rename…**. Type a new name to create a tag or list on the spot.
+- **Rename** (card menu, Details, the selection bar, or "Rename parts…" on a series page). This is the
+  one thing besides saving PDF notes that changes your library, so it is narrow on purpose: books only
+  (folders are never renamed), the file stays in its folder and keeps its extension, nothing is ever
+  overwritten, and it is refused in read-only mode. One book: type the new name. Several: find &
+  replace (optionally a regular expression), clean-up (underscores or dots to spaces, remove
+  `[bracketed]` tags, tidy spaces), letter case, and a name pattern with `{name}` `{n}` (a counter with
+  start, step and digits) `{title}` `{author}` `{series}` `{folder}`, with a live preview of every file;
+  untick files you want to leave alone. Every name is checked first (characters Windows-style
+  drives reject, length, clashes with other books, with files not yet indexed, or within the batch)
+  and if anything is wrong nothing is renamed. Swapping names works. The book keeps its identity, so tags,
+  lists, reading progress and covers stay with it; a toast offers **Undo** afterwards.
 - **Search** (press `/`) matches title, author, series, file name, path and tag names.
 - **Reading lists** keep a manual order; drag cards to reorder. "Open list with…" in a list's header
   sends the whole list, in order, to one of your programs.
@@ -204,7 +237,15 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   backup is for restoring. Highlights, notes and drawings aren't in it (they are in the PDFs).
 - **Settings** (gear at the bottom of the sidebar, or press `,`) controls layout, card size, cover fit, what each card shows, theme, accent
   colour, UI size, reader widths and EPUB text. It all lives in one table in `public/js/settings.js`.
-- **Reader**: vertical scroll. Click (or tap) anywhere on the page to hide or show the top bar; it
+- **Reader**: continuous vertical scroll by default, or **one page at a time (horizontal)** for PDFs and
+  comics: the `M` key or the button in the top bar switches, and Settings sets the default for PDFs and
+  comics separately. Each page is fitted to the window and the pages sit side by side, so you can swipe
+  on a touch screen; `←` `→`, space, `PageDown`/`PageUp`, `Home`/`End`, or a click on the left or right
+  third of the page turn it (the middle third still shows or hides the top bar). For comics there is a
+  **LTR / RTL** button (`D`) for manga that read right to left: pages, arrow keys and click zones all flip.
+  Turning past the end of a part of a series opens the next part (and back from the start, the
+  previous one). EPUBs always scroll. The reader's background follows your theme (Settings > "Reader
+  background" has fixed colours too). Click (or tap) in the middle of the page to hide or show the top bar; it
   stays as you left it. Keys: `+` `-` width, `0` fit window, `n` notes panel, `p` pen, `Ctrl+Z` /
   `Ctrl+Shift+Z` undo and redo, `i` file info, `Esc` back, `f` fullscreen; type a page number to jump. Progress is
   saved and resumed automatically, to the spot within the page (PDF, CBZ) or section (EPUB), not just the page.
@@ -299,8 +340,8 @@ its own sandboxed frame and loaded only when you get near it, so large books ope
 
 ## Not built yet
 
-CBR/RAR, paged and right-to-left reader modes, click zones, next-volume button,
-smart lists, bulk rename, metadata editing, a file watcher, per-user accounts.
+CBR/RAR, a paged mode for EPUB, reading series of PDFs or EPUBs straight through, smart lists,
+renaming folders, metadata editing, a file watcher, per-user accounts.
 
 ## Layout
 
@@ -310,6 +351,7 @@ src/db.ts       SQLite (node:sqlite)               src/meta.ts     PDF / EPUB / 
 src/zip.ts      single entries from zips     src/covers.ts   lazy cover cache (by fingerprint)
 src/shelffile.ts shelf-file checks (+ shelfcli.ts)   src/auth.ts  pass key login
 src/epub.ts     EPUB structure/resources     public/js/epubreader.js  EPUB reader
+src/rename.ts   checked, undoable renames    public/js/rename.js      rename dialogs
 src/pdfnotes.ts highlights/notes inside PDFs src/launch.ts   "Open with" (no shell, argv only)
 src/hygiene.ts  orphan cleanup, storage stats
 src/server.ts   REST API + static files
@@ -322,6 +364,10 @@ another language later without touching the UI (the PDF writing is the part that
 substitute for mupdf).
 
 ## Safety notes
+
+Shelf writes to your library in exactly two cases, both only when you ask and never in read-only mode:
+saving highlights, notes and drawings into a PDF, and renaming a book file (same folder, same
+extension, no overwriting). It never copies, moves between folders, or deletes books.
 
 By default it binds to localhost; with a pass key it can be opened to your network (see "Pass key").
 Cross-origin write requests (e.g. from a web
