@@ -136,19 +136,21 @@ export function ago(ms) {
 }
 
 /** Reading progress as 0..1. EPUBs count the position inside the section too; the others count pages. */
+/** The estimated page an EPUB is on. */
+export const epubPage = (b) => Math.max(1, Math.min(b.pages, Math.ceil(progressFraction(b) * b.pages)));
 export function progressFraction(b) {
   const p = b.progress;
   if (!b.pages || !p?.page) return 0;
-  if (b.format === 'epub') return Math.min(1, Math.max(0, (p.page - 1 + (p.pos ?? 0)) / b.pages));
+  if (b.format === 'epub') return Math.min(1, Math.max(0, p.frac ?? 0)); // fraction of the whole book, by text length
   return Math.min(1, p.page / b.pages);
 }
 /** Finished = the last page (EPUB: the end of the last section). */
 export const isFinished = (b) =>
-  !!b.pages && b.progress?.page >= b.pages && (b.format !== 'epub' || (b.progress.pos ?? 0) >= 0.9);
+  b.format === 'epub' ? (b.progress?.frac ?? 0) >= 0.98 : !!b.pages && b.progress?.page >= b.pages;
 /** "page 12 of 300" / "section 3 of 12 (34%)". */
 export function progressText(b) {
   const p = b.progress;
   if (!p?.page) return '';
-  if (b.format === 'epub') return b.pages ? `section ${p.page} of ${b.pages} (${Math.floor(progressFraction(b) * 100)}%)${isFinished(b) ? ', finished' : ''}` : `section ${p.page}`;
+  if (b.format === 'epub') return b.pages ? `page ~${epubPage(b)} of ~${b.pages} (${Math.floor(progressFraction(b) * 100)}%)${isFinished(b) ? ', finished' : ''}` : `${Math.floor(progressFraction(b) * 100)}%`;
   return b.pages ? `page ${p.page} of ${b.pages}${isFinished(b) ? ' (finished)' : ''}` : `page ${p.page}`;
 }

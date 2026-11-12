@@ -7,9 +7,10 @@ import { ensureThumb } from './covers.js';
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
-import { EPUB_MIME, epubStructure } from './epub.js';
+import { moveToTrash } from './trash.js';
+import { EPUB_MIME, epubStructure, pagesFromChars } from './epub.js';
 import { pdfDetails, toolsAvailable } from './meta.js';
-import { applyRename, planRename, RenameError } from './rename.js';
+import { applyRename, planRename, renameFolder, RenameError } from './rename.js';
 import { purgeMissing, scanState, startScan } from './scanner.js';
 import {
   addAnnotation as addNote,
@@ -114,22 +115,46 @@ function tagMap(): Map<number, number[]> {
 
 type BookX = BookRow & { position?: number };
 
-function bookDTO(b: BookX, tags: Map<number, number[]>) {
+/**
+ * Folders whose only content is one comic (see "comic folders"): folder path -> folder name.
+ * That folder is the series, so its one comic is called by the folder's name, not by its file name.
+ */
+function singleWrappers(): Map<string, string> {
+  const rows = db.prepare(`SELECT dir, format FROM books WHERE missing = 0 AND dir != ''`).all() as Array<{ dir: string; format: string }>;
+  const inside = new Map<string, number>(); // books in the folder or below
+  const comics = new Map<string, number>(); // comics directly in it
+  for (const r of rows) {
+    const parts = r.dir.split('/');
+    for (let i = 1; i <= parts.length; i++) {
+      const d = parts.slice(0, i).join('/');
+      inside.set(d, (inside.get(d) ?? 0) + 1);
+    }
+    if (r.format === 'cbz') comics.set(r.dir, (comics.get(r.dir) ?? 0) + 1);
+  }
+  const out = new Map<string, string>();
+  for (const [d, n] of inside) if (n === 1 && comics.get(d) === 1) out.set(d, path.posix.basename(d));
+  return out;
+}
+
+function bookDTO(b: BookX, tags: Map<number, number[]>, singles: Map<string, string> = singleWrappers()) {
+  const group = b.format === 'cbz' ? singles.get(b.dir) : undefined;
   return {
     id: b.id,
     path: b.path,
     dir: b.dir,
     filename: b.filename,
     format: b.format,
+    isFolder: !!b.is_folder,
+    group,
     size: b.size,
-    title: b.title,
+    title: group ?? b.title,
     author: b.author,
     series: b.series,
     number: b.number,
     pages: b.pages,
     fingerprint: b.fingerprint,
     addedAt: b.added_at,
-    progress: { page: b.progress_page, at: b.progress_at, pos: b.progress_pos },
+    progress: { page: b.progress_page, at: b.progress_at, pos: b.progress_pos, frac: b.progress_frac },
     tagIds: tags.get(b.id) ?? [],
     position: b.position,
   };
@@ -153,6 +178,7 @@ interface DirInfo {
   units: number;
   done: number;
   fraction: number; // 0..1 of the whole series, counted in pages (a finished part counts in full)
+  pages: number; // pages in all its comics together (0 when none is known)
   cover: { id: number; fingerprint: string } | null;
   bookId: number | null;
 }
@@ -203,6 +229,7 @@ function childDirs(parent: string): DirInfo[] {
       units: comics.length,
       done: kind === 'group' ? comics.filter((c) => c.pages && c.progress_page >= c.pages).length : 0,
       fraction: kind === 'group' ? seriesFraction(comics) : 0,
+      pages: kind === 'group' ? comics.reduce((n, c) => n + (c.pages ?? 0), 0) : 0,
       cover: kind === 'group' ? { id: comics[0].id, fingerprint: comics[0].fingerprint } : null,
       bookId: kind === 'single' ? comics[0].id : null,
     });
@@ -220,7 +247,7 @@ app.get('/api/dirs', (req, res) => {
 app.get('/api/series', (req, res) => {
   const dir = typeof req.query.dir === 'string' ? req.query.dir : '';
   const rows = (dir === '' ? [] : db.prepare(`SELECT * FROM books WHERE missing = 0 AND dir = ? AND format = 'cbz'`).all(dir)) as BookX[];
-  if (rows.length < 2) throw new HttpError(404, 'not a series');
+  if (rows.length < 1) throw new HttpError(404, 'not a series');
   rows.sort((a, b) => natCompare(a.filename, b.filename));
   const isDone = (r: BookX) => !!r.pages && r.progress_page >= r.pages;
   const started = rows.filter((r) => r.progress_at !== null);
@@ -242,10 +269,11 @@ app.get('/api/series', (req, res) => {
     }
   }
   const tags = tagMap();
+  const singles = singleWrappers();
   res.json({
     dir,
     name: path.posix.basename(dir),
-    parts: rows.map((r) => bookDTO(r, tags)),
+    parts: rows.map((r) => bookDTO(r, tags, singles)),
     next: next.id,
     state,
     done: rows.filter(isDone).length,
@@ -324,9 +352,11 @@ app.get('/api/books', (req, res) => {
 
   const sort = qstr(req.query.sort) ?? (list ? 'manual' : 'title');
   const dirSign = req.query.order === 'desc' ? -1 : 1;
+  const singles = singleWrappers();
+  const sortName = (r: BookX) => (r.format === 'cbz' && singles.get(r.dir)) || r.filename;
   const cmp: Record<string, (a: BookX, b: BookX) => number> = {
     title: (a, b) => natCompare(a.title, b.title),
-    filename: (a, b) => natCompare(a.filename, b.filename),
+    filename: (a, b) => natCompare(sortName(a), sortName(b)),
     author: (a, b) => natCompare(a.author ?? '￿', b.author ?? '￿') || natCompare(a.title, b.title),
     path: (a, b) => natCompare(a.path, b.path),
     added: (a, b) => a.added_at - b.added_at || natCompare(a.title, b.title),
@@ -335,11 +365,15 @@ app.get('/api/books', (req, res) => {
     read: (a, b) => (a.progress_at ?? 0) - (b.progress_at ?? 0),
     manual: (a, b) => (a.position ?? 0) - (b.position ?? 0),
   };
+  for (const r of rows) {
+    const g = r.format === 'cbz' ? singles.get(r.dir) : undefined;
+    if (g) r.title = g; // sorted and shown by the folder's name
+  }
   const fn = cmp[sort] ?? cmp.title;
   rows.sort((a, b) => fn(a, b) * dirSign);
 
   const tags = tagMap();
-  res.json(rows.map((r) => bookDTO(r, tags)));
+  res.json(rows.map((r) => bookDTO(r, tags, singles)));
 });
 
 app.get('/api/books/:id', (req, res) => {
@@ -405,6 +439,7 @@ app.get('/api/tree', (_req, res) => {
 
 app.get('/api/books/:id/file', (req, res) => {
   const book = getBook(req.params.id);
+  if (book.is_folder) throw new HttpError(400, 'this comic is a folder of images; there is no single file to download');
   const abs = absPath(book);
   cacheHeaders(req, res, book);
   if (req.query.download === '1') res.attachment(book.filename);
@@ -426,7 +461,7 @@ app.get('/api/books/:id/cover', async (req, res) => {
 app.get('/api/books/:id/pages', async (req, res) => {
   const book = getBook(req.params.id);
   if (book.format !== 'cbz') throw new HttpError(400, 'not a comic archive');
-  const pages = await comicPages(`${book.id}:${book.fingerprint}`, absPath(book));
+  const pages = await comicPages(`${book.id}:${book.fingerprint}`, absPath(book), !!book.is_folder);
   res.json({ count: pages.length });
 });
 
@@ -434,10 +469,17 @@ app.get('/api/books/:id/pages/:n', async (req, res) => {
   const book = getBook(req.params.id);
   if (book.format !== 'cbz') throw new HttpError(400, 'not a comic archive');
   const abs = absPath(book);
-  const pages = await comicPages(`${book.id}:${book.fingerprint}`, abs);
+  const pages = await comicPages(`${book.id}:${book.fingerprint}`, abs, !!book.is_folder);
   const n = toInt(req.params.n);
   if (n < 1 || n > pages.length) throw new HttpError(404, 'page out of range');
   const name = pages[n - 1];
+  if (book.is_folder) {
+    cacheHeaders(req, res, book);
+    res.sendFile(path.join(abs, name), { dotfiles: 'allow', acceptRanges: true, cacheControl: false }, (err) => {
+      if (err && !res.headersSent) res.status(404).json({ error: 'page not found on disk; try rescanning' });
+    });
+    return;
+  }
   const { stream, size } = await openEntryStream(abs, name);
   const ext = imageExt(name) ?? '.jpg';
   res.setHeader('Content-Type', IMAGE_MIME[ext] ?? 'application/octet-stream');
@@ -463,13 +505,16 @@ app.get('/api/books/:id/epub', async (req, res) => {
   } catch (e) {
     throw new HttpError(422, `can't read this EPUB: ${(e as Error).message}`);
   }
-  // The section count doubles as "pages" for progress bars.
-  if (book.pages !== st.spine.length) db.prepare('UPDATE books SET pages = ? WHERE id = ?').run(st.spine.length, book.id);
+  // Pages are estimated from the text (see epub.ts); keep the index in step with what the reader will show.
+  const chars = st.chars ?? st.spine.map(() => 1);
+  const pages = pagesFromChars(chars);
+  if (book.pages !== pages) db.prepare('UPDATE books SET pages = ? WHERE id = ?').run(pages, book.id);
   res.setHeader('Cache-Control', 'no-cache');
   res.json({
     title: st.title,
     rtl: st.rtl,
-    spine: st.spine.map((s) => ({ path: s.path, size: s.size, kind: s.kind })),
+    pages,
+    spine: st.spine.map((s, i) => ({ path: s.path, size: s.size, kind: s.kind, chars: chars[i] })),
     toc: st.toc,
   });
 });
@@ -522,23 +567,62 @@ app.post('/api/rename', async (req, res) => {
   }
 });
 
+// ---------- renaming folders, and the trash ----------
+
+app.post('/api/rename-folder', async (req, res) => {
+  if (READONLY) throw new HttpError(403, 'Shelf is in read-only mode, so it will not rename folders.');
+  if (scanState.running) throw new HttpError(409, 'Shelf is scanning the library right now. Try again in a moment.');
+  try {
+    res.json(await renameFolder(String(req.body?.dir ?? ''), String(req.body?.name ?? '')));
+  } catch (e) {
+    if (e instanceof RenameError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
+});
+
+// Moves books (by id) and folders (by library path) into the trash folder inside the library. See trash.ts.
+app.post('/api/trash', async (req, res) => {
+  if (READONLY) throw new HttpError(403, 'Shelf is in read-only mode, so it will not delete anything.');
+  if (scanState.running) throw new HttpError(409, 'Shelf is scanning the library right now. Try again in a moment.');
+  const ids: unknown[] = Array.isArray(req.body?.books) ? req.body.books : [];
+  const dirs: unknown[] = Array.isArray(req.body?.dirs) ? req.body.dirs : [];
+  if (!ids.length && !dirs.length) throw new HttpError(400, 'books and/or dirs expected');
+  if (ids.length + dirs.length > 5000) throw new HttpError(400, 'too many items');
+  const rels = [...dirs.filter((d): d is string => typeof d === 'string' && d !== '')];
+  for (const id of ids) {
+    const row = db.prepare('SELECT path FROM books WHERE id = ?').get(toInt(id)) as { path: string } | undefined;
+    if (row) rels.push(row.path);
+  }
+  res.json(await moveToTrash(rels));
+});
+
 // ---------- reading progress ----------
 
-app.put('/api/books/:id/progress', (req, res) => {
+app.put('/api/books/:id/progress', async (req, res) => {
   const book = getBook(req.params.id);
   let page = toInt(req.body?.page);
   if (page < 1) page = 1;
-  if (book.pages && page > book.pages) page = book.pages;
-  // EPUB: where inside the section (0..1). Other formats don't send it.
-  const rawPos = req.body?.pos;
-  const pos = typeof rawPos === 'number' && Number.isFinite(rawPos) ? Math.min(1, Math.max(0, rawPos)) : null;
-  db.prepare('UPDATE books SET progress_page = ?, progress_pos = ?, progress_at = ? WHERE id = ?').run(page, pos, Date.now(), book.id);
-  res.json({ page, pos });
+  if (book.format !== 'epub' && book.pages && page > book.pages) page = book.pages; // (an EPUB's page is a section number)
+  // EPUB: where inside the section (0..1), and how far through the whole book. Other formats don't send them.
+  const unit = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : null);
+  const pos = unit(req.body?.pos);
+  let frac = unit(req.body?.frac);
+  if (frac === null && book.format === 'epub' && pos !== null) {
+    // A client that only knows (section, spot): work out how far through the book that is.
+    const st = await epubStructure(`${book.id}:${book.fingerprint}`, absPath(book)).catch(() => null);
+    if (st?.chars) {
+      const i = Math.min(page, st.chars.length) - 1;
+      const all = st.chars.reduce((x, y) => x + y, 0);
+      frac = Math.min(1, (st.chars.slice(0, i).reduce((x, y) => x + y, 0) + pos * st.chars[i]) / all);
+    }
+  }
+  db.prepare('UPDATE books SET progress_page = ?, progress_pos = ?, progress_frac = ?, progress_at = ? WHERE id = ?').run(page, pos, frac, Date.now(), book.id);
+  res.json({ page, pos, frac });
 });
 
 app.delete('/api/books/:id/progress', (req, res) => {
   const book = getBook(req.params.id);
-  db.prepare('UPDATE books SET progress_page = 0, progress_pos = NULL, progress_at = NULL WHERE id = ?').run(book.id);
+  db.prepare('UPDATE books SET progress_page = 0, progress_pos = NULL, progress_frac = NULL, progress_at = NULL WHERE id = ?').run(book.id);
   res.json({ ok: true });
 });
 

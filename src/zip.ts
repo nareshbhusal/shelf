@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { Readable } from 'node:stream';
 import yauzl from 'yauzl';
@@ -76,6 +77,41 @@ export async function openEntryStream(
   });
 }
 
+/** Read several entries with one pass over the zip (opening it once per entry is slow for a book of hundreds). */
+export async function readEntries(
+  file: string,
+  wanted: Set<string>,
+  each: (name: string, data: Buffer) => void,
+  max = 8 * 1024 * 1024,
+): Promise<void> {
+  const zip = await open(file);
+  return new Promise((resolve, reject) => {
+    const fail = (err: Error) => {
+      zip.close();
+      reject(err);
+    };
+    zip.on('entry', (e: yauzl.Entry) => {
+      if (!wanted.has(e.fileName) || e.uncompressedSize > max) return zip.readEntry();
+      zip.openReadStream(e, (err, stream) => {
+        if (err || !stream) return fail(err ?? new Error('could not read zip entry'));
+        const chunks: Buffer[] = [];
+        stream.on('data', (c: Buffer) => chunks.push(c));
+        stream.on('error', fail);
+        stream.on('end', () => {
+          each(e.fileName, Buffer.concat(chunks));
+          zip.readEntry();
+        });
+      });
+    });
+    zip.on('end', () => {
+      zip.close();
+      resolve();
+    });
+    zip.on('error', fail);
+    zip.readEntry();
+  });
+}
+
 export async function readEntry(file: string, name: string, max = 64 * 1024 * 1024): Promise<Buffer> {
   const { stream } = await openEntryStream(file, name);
   const chunks: Buffer[] = [];
@@ -109,9 +145,19 @@ export function imageNames(entries: ZipEntryInfo[]): string[] {
 // Sorted page lists, cached so serving page N doesn't re-list the whole archive each time.
 const pageCache = new Map<string, string[]>();
 
+/** A comic that is just a folder of loose images: its pages in natural order. */
+export async function folderImages(dir: string): Promise<string[]> {
+  const ents = await fs.readdir(dir, { withFileTypes: true });
+  return ents
+    .filter((e) => (e.isFile() || e.isSymbolicLink()) && imageExt(e.name))
+    .map((e) => e.name)
+    .sort(natCompare);
+}
+
 export async function comicPages(
   key: string,
   file: string,
+  folder = false,
 ): Promise<string[]> {
   const hit = pageCache.get(key);
   if (hit) {
@@ -119,7 +165,7 @@ export async function comicPages(
     pageCache.set(key, hit); // refresh LRU position
     return hit;
   }
-  const names = imageNames(await listEntries(file));
+  const names = folder ? await folderImages(file) : imageNames(await listEntries(file));
   pageCache.set(key, names);
   if (pageCache.size > 64) pageCache.delete(pageCache.keys().next().value as string);
   return names;

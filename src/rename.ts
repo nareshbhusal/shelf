@@ -92,6 +92,7 @@ export async function planRename(items: RenameItem[]): Promise<RenamePlan[]> {
     const to = path.posix.join(row.dir, base + ext);
     const plan: RenamePlan = { id: it.id, from: row.path, to };
     if (seenIds.has(it.id)) plan.error = 'The same book is listed twice.';
+    else if (row.is_folder) plan.error = 'A folder of images is named by its folder; rename the folder on disk instead.';
     else if (row.missing) plan.error = 'The file is missing from the library right now.';
     else plan.error = nameProblem(base, ext) ?? undefined;
     seenIds.add(it.id);
@@ -198,4 +199,64 @@ export async function applyRename(plans: RenamePlan[]): Promise<number> {
     }
   })();
   return todo.length;
+}
+
+// ---------------------------------------------------------------- folders
+
+/** Why a folder can't be renamed to `base`, or null. Same rules as files, and no leading dot (the scan skips those). */
+function folderNameProblem(base: string): string | null {
+  if (base.startsWith('.')) return 'A name starting with a dot would hide the folder from the library.';
+  return nameProblem(base, '');
+}
+
+export interface FolderRename {
+  from: string;
+  to: string;
+  books: number;
+}
+
+/** Renames one folder (same place, new name) and fixes the paths of everything in it. Throws RenameError. */
+export async function renameFolder(dir: string, rawName: string): Promise<FolderRename> {
+  const from = path.posix.normalize(String(dir ?? '').replace(/\\/g, '/')).replace(/\/+$/, '');
+  if (!from || from === '.' || from.startsWith('..') || from.split('/').some((p) => p.startsWith('.'))) throw new RenameError(400, 'That folder can’t be renamed.');
+  const name = String(rawName ?? '').normalize('NFC');
+  const problem = folderNameProblem(name);
+  if (problem) throw new RenameError(400, problem);
+  const parent = path.posix.dirname(from) === '.' ? '' : path.posix.dirname(from);
+  const to = path.posix.join(parent, name);
+  const absFrom = path.resolve(LIBRARY_DIR, from);
+  const absTo = path.resolve(LIBRARY_DIR, to);
+  if (!absFrom.startsWith(LIBRARY_DIR + path.sep) || !absTo.startsWith(LIBRARY_DIR + path.sep)) throw new RenameError(400, 'Bad path.');
+  let st;
+  try {
+    st = await fs.lstat(absFrom);
+  } catch {
+    throw new RenameError(404, 'That folder is no longer there.');
+  }
+  if (!st.isDirectory()) throw new RenameError(400, 'That is not a folder.');
+  const books = (db.prepare(`SELECT COUNT(*) AS n FROM books WHERE missing = 0 AND (path = ? OR substr(path, 1, ?) = ?)`).get(from, from.length + 1, from + '/') as { n: number }).n;
+  if (to === from) return { from, to, books };
+  const caseOnly = key(to) === key(from);
+  if (!caseOnly || !(await sameFile(absFrom, absTo)))
+    if (await exists(absTo)) throw new RenameError(409, `There is already something called “${name}” in that place.`);
+  try {
+    await fs.access(path.dirname(absFrom), fs.constants.W_OK);
+    await fs.rename(absFrom, absTo);
+  } catch (e) {
+    throw new RenameError(500, `Could not rename: ${(e as NodeJS.ErrnoException).code ?? ''} ${(e as Error).message}`.replace('  ', ' '));
+  }
+  const rows = db.prepare(`SELECT id, path, meta_title FROM books WHERE path = ? OR substr(path, 1, ?) = ?`).all(from, from.length + 1, from + '/') as Array<{ id: number; path: string; meta_title: string | null }>;
+  const upd = db.prepare(`UPDATE books SET path = ?, dir = ?, filename = ?, title = ? WHERE id = ?`);
+  db.transaction(() => {
+    // Rows of files that were already gone and sit at the new names would clash with the moved ones.
+    db.prepare(`DELETE FROM books WHERE missing = 1 AND (path = ? OR substr(path, 1, ?) = ?)`).run(to, to.length + 1, to + '/');
+    for (const r of rows) {
+      const np = to + r.path.slice(from.length);
+      const filename = path.posix.basename(np);
+      const nd = path.posix.dirname(np) === '.' ? '' : path.posix.dirname(np);
+      // A comic that is itself the renamed folder (loose images) is named after it.
+      upd.run(np, nd, filename, r.meta_title ?? (r.path === from ? name : titleFromFilename(filename)), r.id);
+    }
+  })();
+  return { from, to, books };
 }

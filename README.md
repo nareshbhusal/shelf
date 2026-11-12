@@ -177,13 +177,21 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   The sidebar list is A–Z by default; the clock button next to "Folders" (or Settings > Sorting) puts the
   folders you read most recently first (a folder counts as read when anything inside it, at any depth, was).
   Folders you never read stay at the bottom, A–Z. The choice is saved with the shelf.
-- **Comic folders.** A folder with two or more comic files (`.cbz` / `.zip`) directly inside is shown as one
-  card (a stacked cover from its first comic, the folder's name, a ×N badge, "n read"); opening it lists
-  its comics alphabetically. Series and collections of one-shots are treated alike. A folder whose only
-  content is a single comic (the layout Kavita requires) disappears from the listing and that comic is
-  shown itself. Everything else stays an ordinary folder, and "Subfolders" shows the flat list. The card's
-  menu can tag, or add to a reading list, all of its comics at once. Settings > Library > "Folders with
-  several comics as one card" turns this off. Folders of loose image files (no archive) are not indexed yet.
+- **Comic folders.** A comic (a *unit*) is a `.cbz` / `.zip`, or a folder of loose images (see below). A
+  folder with two or more units directly inside is shown as one card (a stacked cover from its first
+  unit, the folder's name, a ×N badge, "2 comics · 340 pages", "n read"); opening it lists its units
+  alphabetically. Series and collections of one-shots are treated alike. A folder whose only content is a
+  single unit (the layout Kavita requires) disappears from the listing and that comic is shown itself,
+  **named after the folder** ("Mushishi", not "Official_Volume 1"). Opening it shows the same series page
+  as a bigger series (Read / Continue, rename, trash); add a second volume and the volumes take their own names. Everything else stays an ordinary folder, and "Subfolders" shows the flat list. The
+  card's menu can tag, or add to a reading list, all of its units at once. Settings > Library > "Folders
+  with several comics as one card" turns this off.
+- **Folders of loose images.** Manga kept as plain image files (jpg, png, webp, gif, avif, bmp) work too:
+  a folder with three or more images directly inside, and no PDF / EPUB / CBZ next to them, is one comic
+  named after the folder, read in natural order (`2.jpg` before `10.jpg`). Put each volume or chapter in
+  its own folder, or put the images straight into the series folder. The images are never touched; a
+  renamed or moved folder is recognised by its page list, so progress and tags stay. These comics can't be
+  downloaded as one file or renamed from Shelf (rename the folder on disk).
 - **Reading a series.** Open such a folder and the panel at the top has a **Read** button (**Continue**
   once you've started, **Read again** when everything is read). It opens the part you left off at (the
   last-read part if unfinished, otherwise the next unfinished one). In the reader the parts run on
@@ -205,8 +213,7 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
 - **Select** books (checkbox on hover, shift-click for ranges, Ctrl+A) then **Tag**, **Add to list**,
   **Open with** or **Rename…**. Type a new name to create a tag or list on the spot.
 - **Rename** (card menu, Details, the selection bar, or "Rename parts…" on a series page). This is the
-  one thing besides saving PDF notes that changes your library, so it is narrow on purpose: books only
-  (folders are never renamed), the file stays in its folder and keeps its extension, nothing is ever
+  narrow on purpose: the file stays in its folder and keeps its extension, nothing is ever
   overwritten, and it is refused in read-only mode. One book: type the new name. Several: find &
   replace (optionally a regular expression), clean-up (underscores or dots to spaces, remove
   `[bracketed]` tags, tidy spaces), letter case, and a name pattern with `{name}` `{n}` (a counter with
@@ -230,9 +237,18 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   that only your user can open, and only launches the commands you saved in Settings). After a reboot
   `./shelf.sh start` (or `./shelf.sh opener`) brings it back. Settings > Programs says whether it is
   reachable. Running natively needs no helper.
+- **Rename a folder** (the ⋯ on a folder or series card, or the ⋯ in the header while you are inside one).
+  Same place, new name; everything in it keeps its tags, lists and progress. Names starting with a dot are
+  refused (the scan skips those), as are existing names.
+- **Delete = move to the trash.** "Move to trash…" (book or folder menus, the selection bar) moves the item into
+  a `.shelf-trash` folder inside your library, under a dated sub-folder that keeps its original path
+  (`.shelf-trash/2026-11-12_21-05-00-ab12/manga/Series/Vol 1.cbz`). Nothing is erased, and the scan
+  skips the trash. To undo, move it back out and rescan: Shelf recognises the book by its content, and its tags,
+  lists and progress come back. Empty the trash yourself when you want the space. A single-volume series card
+  deletes its folder with it. Refused in read-only mode.
 - **Export data** (Settings > Storage & backup): a readable JSON file with your tags (colours, counts),
   reading lists in order, per-book tags/lists/progress, programs, display settings and the book index.
-  (Progress for EPUBs includes the position inside the section.)
+  (Progress for EPUBs is the section, the position inside it, and the fraction of the whole book.)
   Books carry path and content fingerprint. It is for reading, diffing and moving data around; the
   backup is for restoring. Highlights, notes and drawings aren't in it (they are in the PDFs).
 - **Settings** (gear at the bottom of the sidebar, or press `,`) controls layout, card size, cover fit, what each card shows, theme, accent
@@ -249,6 +265,8 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   stays as you left it. Keys: `+` `-` width, `0` fit window, `n` notes panel, `p` pen, `Ctrl+Z` /
   `Ctrl+Shift+Z` undo and redo, `i` file info, `Esc` back, `f` fullscreen; type a page number to jump. Progress is
   saved and resumed automatically, to the spot within the page (PDF, CBZ) or section (EPUB), not just the page.
+  A small page counter sits in the bottom-right corner (it stays when the toolbar is hidden); in a series it also
+  names the part, and a brief note appears when you cross into the next part.
   EPUB-only keys: `t` contents, `[` `]` smaller/larger text, `←` `→` previous/next section. The (i) button shows everything about the file: location (copyable),
   size, dates, pages, tags, reading lists, progress, number of annotations, fingerprint and, for PDFs,
   version, producer and page size.
@@ -310,8 +328,8 @@ Limits:
 | Format          | Browse / tag / search | Cover | Metadata                       | Reader | Notes |
 |-----------------|:---------------------:|:-----:|--------------------------------|:------:|:-----:|
 | PDF             | yes | page 1 | title, author, pages (poppler) | yes (pdf.js) | yes |
-| CBZ / ZIP of images | yes | first page | `ComicInfo.xml` if present; pages | yes | no |
-| EPUB            | yes | cover image | title, author, series (Calibre/EPUB3), sections | yes (own, see below) | no |
+| CBZ / ZIP of images, or a folder of images | yes | first page | `ComicInfo.xml` if present; pages | yes | no |
+| EPUB            | yes | cover image | title, author, series (Calibre/EPUB3), estimated pages | yes (own, see below) | no |
 
 Progress stores the page plus how far down it you were (measured at a reading line 35% down the window).
 Reopening scrolls to that spot; a book saved by an older version, or opened with `?page=N`, opens at the page top.
@@ -330,8 +348,10 @@ its own sandboxed frame and loaded only when you get near it, so large books ope
 - Text size, line spacing and font (serif, sans, or the book's own) from the **Aa** button or `[` `]`; text
   width like the other readers. Colours follow your theme and "reader background" (the book's own text
   and background colours are overridden so dark mode stays readable).
-- Progress is the section plus how far into it, so reopening lands where you stopped. The library shows
-  it as a percentage; "pages" for an EPUB means sections.
+- Progress is the section plus how far into it, so reopening lands where you stopped. **Pages are an
+  estimate**: the amount of text divided by about 1800 characters (a paperback page; a section made of a
+  picture counts as one page), counted once when the book is scanned. Cards show "~312 p", the reader's corner
+  counter shows "p. ~87/~312 · 28%", and the progress bar is the fraction of the book by text, not by sections.
 - **Scripts in books never run**, nothing loads from outside the book, and the frames can't submit forms or
   open windows (sandbox plus a strict Content-Security-Policy on every file served from inside an EPUB).
 - Sloppy XHTML that isn't well-formed XML is shown through the forgiving HTML parser instead.
@@ -365,9 +385,10 @@ substitute for mupdf).
 
 ## Safety notes
 
-Shelf writes to your library in exactly two cases, both only when you ask and never in read-only mode:
-saving highlights, notes and drawings into a PDF, and renaming a book file (same folder, same
-extension, no overwriting). It never copies, moves between folders, or deletes books.
+Shelf writes to your library in exactly these cases, all only when you ask and never in read-only mode:
+saving highlights, notes and drawings into a PDF; renaming a book file or a folder (same place, no
+overwriting); and moving books or folders into the `.shelf-trash` folder inside the library. It never copies
+books and never erases anything.
 
 By default it binds to localhost; with a pass key it can be opened to your network (see "Pass key").
 Cross-origin write requests (e.g. from a web

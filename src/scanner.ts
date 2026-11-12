@@ -6,6 +6,8 @@ import { db, type BookRow } from './db.js';
 import { cbzInfo, epubInfo, pdfMeta, type Meta } from './meta.js';
 import { checkpoint, gcThumbs } from './hygiene.js';
 import { fingerprint, mapPool, titleFromFilename } from './util.js';
+import { imageExt } from './zip.js';
+import crypto from 'node:crypto';
 
 export interface ScanState {
   running: boolean;
@@ -37,7 +39,12 @@ interface Found {
   size: number;
   mtimeMs: number;
   format: Format;
+  /** Set for a comic that is a folder of loose images: the images (name and size). rel/abs are the folder. */
+  images?: Array<{ name: string; size: number }>;
 }
+
+/** A folder with at least this many loose images (and no book files beside them) is one comic. */
+const MIN_FOLDER_PAGES = 3;
 
 const toRel = (abs: string) => path.relative(LIBRARY_DIR, abs).split(path.sep).join('/');
 const dirOf = (rel: string) => {
@@ -70,6 +77,8 @@ async function walk(): Promise<Found[]> {
       scanState.errors++;
       continue;
     }
+    const pictures: string[] = [];
+    let hasBook = false;
     for (const ent of entries) {
       if (ent.name.startsWith('.')) continue;
       const abs = path.join(dir, ent.name);
@@ -91,7 +100,11 @@ async function walk(): Promise<Found[]> {
       }
       if (!isFile) continue;
       const format = EXT_FORMAT[path.extname(ent.name).toLowerCase()];
-      if (!format) continue;
+      if (!format) {
+        if (imageExt(ent.name)) pictures.push(ent.name);
+        continue;
+      }
+      hasBook = true;
       try {
         const st = await fs.stat(abs);
         out.push({ rel: toRel(abs), abs, size: st.size, mtimeMs: Math.floor(st.mtimeMs), format });
@@ -99,18 +112,46 @@ async function walk(): Promise<Found[]> {
         scanState.errors++;
       }
     }
+    // Loose pages: manga ripped as plain image files. The folder is the comic (named after itself).
+    if (dir !== LIBRARY_DIR && !hasBook && pictures.length >= MIN_FOLDER_PAGES) {
+      const images: Array<{ name: string; size: number }> = [];
+      let mtimeMs = 0;
+      for (const name of pictures) {
+        try {
+          const st = await fs.stat(path.join(dir, name));
+          if (!st.isFile()) continue;
+          images.push({ name, size: st.size });
+          mtimeMs = Math.max(mtimeMs, Math.floor(st.mtimeMs));
+        } catch {
+          scanState.errors++;
+        }
+      }
+      if (images.length >= MIN_FOLDER_PAGES) {
+        images.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        out.push({ rel: toRel(dir), abs: dir, size: images.reduce((n, i) => n + i.size, 0), mtimeMs, format: 'cbz', images });
+      }
+    }
   }
   return out;
 }
 
+/** Identity of a comic: sampled content for a file; the list of page names and sizes for a folder. */
+async function identify(f: Found): Promise<string> {
+  if (!f.images) return fingerprint(f.abs, f.size);
+  const h = crypto.createHash('sha1');
+  for (const i of f.images) h.update(`${i.name}:${i.size}\n`);
+  return h.digest('hex');
+}
+
 /** Returns null when the file shouldn't be indexed (e.g. a .zip with no images, or an unreadable archive). */
 async function extract(f: Found): Promise<Meta | null> {
+  if (f.images) return { pages: f.images.length };
   try {
     switch (f.format) {
       case 'pdf':
         return await pdfMeta(f.abs);
       case 'epub':
-        return (await epubInfo(f.abs)).meta;
+        return (await epubInfo(f.abs, true)).meta;
       case 'cbz':
         return (await cbzInfo(f.abs))?.meta ?? null;
     }
@@ -122,18 +163,31 @@ async function extract(f: Found): Promise<Meta | null> {
 
 const insertBook = db.prepare(`
   INSERT INTO books (path, dir, filename, format, size, mtime_ms, fingerprint, meta_title, title,
-                     author, series, number, pages, added_at, missing)
+                     author, series, number, pages, added_at, missing, is_folder)
   VALUES (@path, @dir, @filename, @format, @size, @mtime_ms, @fingerprint, @meta_title, @title,
-          @author, @series, @number, @pages, @added_at, 0)`);
+          @author, @series, @number, @pages, @added_at, 0, @is_folder)`);
 const moveBook = db.prepare(
   `UPDATE books SET path=@path, dir=@dir, filename=@filename, mtime_ms=@mtime_ms, title=@title, missing=0 WHERE id=@id`,
 );
 const updateBook = db.prepare(`
   UPDATE books SET size=@size, mtime_ms=@mtime_ms, fingerprint=@fingerprint, meta_title=@meta_title,
-         title=@title, author=@author, series=@series, number=@number, pages=@pages, missing=0
+         title=@title, author=@author, series=@series, number=@number, pages=@pages, is_folder=@is_folder, missing=0,
+         progress_frac=COALESCE(progress_frac, @frac)
   WHERE id=@id`);
 const setMissing = db.prepare(`UPDATE books SET missing=1 WHERE id=?`);
 const clearMissing = db.prepare(`UPDATE books SET missing=0 WHERE id=?`);
+
+/** An EPUB read before page estimates existed has (section, spot in section); express that as a fraction of the book. */
+function savedFraction(row: BookRow, chars?: number[]): number | null {
+  if (row.format !== 'epub' || !chars?.length || row.progress_page < 1) return null;
+  const i = Math.min(row.progress_page, chars.length) - 1;
+  const before = chars.slice(0, i).reduce((a, b) => a + b, 0);
+  const all = chars.reduce((a, b) => a + b, 0);
+  return all ? Math.min(1, (before + (row.progress_pos ?? 0) * chars[i]) / all) : null;
+}
+
+/** A folder's name has no extension to strip ("Vol 1.5" is not a ".5" file). */
+const nameTitle = (filename: string, folder: boolean) => (folder ? filename.normalize('NFC') : titleFromFilename(filename));
 
 function bookFields(f: Found, fp: string, meta: Meta) {
   const filename = path.posix.basename(f.rel);
@@ -146,11 +200,12 @@ function bookFields(f: Found, fp: string, meta: Meta) {
     mtime_ms: f.mtimeMs,
     fingerprint: fp,
     meta_title: meta.metaTitle ?? null,
-    title: meta.metaTitle ?? titleFromFilename(filename),
+    title: meta.metaTitle ?? nameTitle(filename, !!f.images),
     author: meta.author ?? null,
     series: meta.series ?? null,
     number: meta.number ?? null,
     pages: meta.pages ?? null,
+    is_folder: f.images ? 1 : 0,
   };
 }
 
@@ -244,7 +299,7 @@ async function runScan(full: boolean): Promise<void> {
 
   await mapPool(fresh, 8, async (f) => {
     try {
-      const fp = await fingerprint(f.abs, f.size);
+      const fp = await identify(f);
       const cand = goneByFp.get(fp)?.find((r) => r.size === f.size && !claimed.has(r.id));
       if (cand) {
         claimed.add(cand.id);
@@ -262,7 +317,7 @@ async function runScan(full: boolean): Promise<void> {
   // Read metadata for genuinely new and modified files.
   scanState.phase = 'reading';
   const inserts: ReturnType<typeof bookFields>[] = [];
-  const updates: Array<ReturnType<typeof bookFields> & { id: number }> = [];
+  const updates: Array<ReturnType<typeof bookFields> & { id: number; frac: number | null }> = [];
 
   await mapPool(brandNew, 4, async ({ f, fp }) => {
     const meta = await extract(f);
@@ -272,9 +327,9 @@ async function runScan(full: boolean): Promise<void> {
   });
   await mapPool(changed, 4, async ({ f, row }) => {
     try {
-      const fp = await fingerprint(f.abs, f.size);
+      const fp = await identify(f);
       const meta = await extract(f);
-      if (meta) updates.push({ ...bookFields(f, fp, meta), id: row.id });
+      if (meta) updates.push({ ...bookFields(f, fp, meta), id: row.id, frac: savedFraction(row, meta.epubChars) });
       else scanState.skipped++;
     } catch {
       scanState.errors++;
@@ -295,7 +350,7 @@ async function runScan(full: boolean): Promise<void> {
         dir: dirOf(f.rel),
         filename,
         mtime_ms: f.mtimeMs,
-        title: row.meta_title ?? titleFromFilename(filename),
+        title: row.meta_title ?? nameTitle(filename, !!row.is_folder),
       });
     }
     for (const u of updates) updateBook.run(u);

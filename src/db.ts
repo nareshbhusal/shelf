@@ -21,6 +21,8 @@ export interface BookRow {
   progress_page: number;
   progress_at: number | null;
   progress_pos: number | null; // EPUB: how far into the section (0..1)
+  progress_frac: number | null; // EPUB: how far through the whole book (0..1), by text length
+  is_folder: number; // 1 = a comic that is a folder of loose images (path is the folder)
 }
 
 // SQLite comes from Node itself (node:sqlite), not from a prebuilt native add-on. The add-on we used
@@ -111,7 +113,9 @@ CREATE TABLE IF NOT EXISTS books (
   missing       INTEGER NOT NULL DEFAULT 0,
   progress_page INTEGER NOT NULL DEFAULT 0,
   progress_at   INTEGER,
-  progress_pos  REAL
+  progress_pos  REAL,
+  is_folder     INTEGER NOT NULL DEFAULT 0,
+  progress_frac REAL
 );
 CREATE INDEX IF NOT EXISTS books_dir ON books(dir);
 CREATE INDEX IF NOT EXISTS books_fp ON books(fingerprint);
@@ -159,6 +163,16 @@ CREATE TABLE IF NOT EXISTS kv (
 if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'progress_pos')) {
   db.exec('ALTER TABLE books ADD COLUMN progress_pos REAL');
 }
+if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'is_folder')) {
+  db.exec('ALTER TABLE books ADD COLUMN is_folder INTEGER NOT NULL DEFAULT 0');
+}
+if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'progress_frac')) {
+  db.exec('ALTER TABLE books ADD COLUMN progress_frac REAL');
+}
+// EPUB page counts used to be section counts; make the next scan count them again (progress is kept).
+if (((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version ?? 0) < 8) {
+  db.exec("UPDATE books SET mtime_ms = 0 WHERE format = 'epub'");
+}
 // Older databases had one set of programs for both; keep every program available for both kinds.
 if (!(db.prepare('PRAGMA table_info(readers)').all() as Array<{ name: string }>).some((c) => c.name === 'scope')) {
   db.exec("ALTER TABLE readers ADD COLUMN scope TEXT NOT NULL DEFAULT 'books'");
@@ -166,4 +180,4 @@ if (!(db.prepare('PRAGMA table_info(readers)').all() as Array<{ name: string }>)
 }
 // Highlights/notes are stored inside the PDFs themselves, never here. (Earlier dev builds had a table for them.)
 db.exec('DROP TABLE IF EXISTS annotations');
-db.pragma('user_version = 6');
+db.pragma('user_version = 8');

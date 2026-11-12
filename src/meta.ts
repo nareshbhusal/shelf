@@ -3,7 +3,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { XMLParser } from 'fast-xml-parser';
 import { usableAuthor, usableTitle } from './util.js';
-import { readEpubStructure } from './epub.js';
+import { countText, pagesFromChars, readEpubStructure } from './epub.js';
 import { imageNames, listEntries, readEntry } from './zip.js';
 
 const execFileP = promisify(execFile);
@@ -14,6 +14,7 @@ export interface Meta {
   series?: string;
   number?: string;
   pages?: number;
+  epubChars?: number[]; // EPUB only: text length per section (used to place saved progress)
 }
 
 const xml = new XMLParser({
@@ -90,7 +91,7 @@ export async function toolsAvailable(): Promise<{ pdfinfo: boolean; pdftoppm: bo
 
 // ---------- EPUB ----------
 
-export async function epubInfo(file: string): Promise<{ meta: Meta; coverEntry?: string }> {
+export async function epubInfo(file: string, withText = false): Promise<{ meta: Meta; coverEntry?: string }> {
   const container = xml.parse((await readEntry(file, 'META-INF/container.xml')).toString('utf8'));
   const opfPath = asArray(container?.container?.rootfiles?.rootfile)[0]?.['@_full-path'] as string | undefined;
   if (!opfPath) return { meta: {} };
@@ -132,11 +133,15 @@ export async function epubInfo(file: string): Promise<{ meta: Meta; coverEntry?:
     }
     coverEntry = path.posix.normalize(path.posix.join(base, decoded));
   }
-  // Sections of the book; the reader and the progress bar count in these.
-  try {
-    meta.pages = (await readEpubStructure(file, false)).spine.length;
-  } catch {
-    /* unreadable structure: no count */
+  // Pages are estimated from the amount of text. Only counted when asked for (scanning), not for a cover.
+  if (withText) {
+    try {
+      const st = await readEpubStructure(file, false);
+      meta.epubChars = await countText(file, st.spine);
+      meta.pages = pagesFromChars(meta.epubChars);
+    } catch {
+      /* unreadable structure: no count */
+    }
   }
   return { meta, coverEntry };
 }

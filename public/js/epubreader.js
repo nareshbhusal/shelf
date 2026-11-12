@@ -36,7 +36,7 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
     throw new Error(e.message);
   }
   const N = meta.spine.length;
-  setTotal(N);
+  setTotal(N, meta.spine.map((s) => s.chars || 1), meta.pages);
 
   const fileUrl = (p, extra = '') => `/api/books/${book.id}/epub/f/${encodePath(p)}?v=${book.fingerprint}${extra}`;
   const estimate = (it) => (it.kind === 'image' ? 700 : clamp(Math.round(it.size * 0.25), 320, 60000));

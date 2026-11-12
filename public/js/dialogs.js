@@ -223,7 +223,7 @@ export async function openBookInfo(book, { onChange } = {}) {
   const finished = isFinished(book);
   const fields = [
     ['Format', book.format.toUpperCase()],
-    book.pages ? [book.format === 'epub' ? 'Sections' : 'Pages', String(book.pages)] : null,
+    book.pages ? [book.format === 'epub' ? 'Pages (estimated)' : 'Pages', (book.format === 'epub' ? '~' : '') + String(book.pages)] : null,
     ['Size', fmtBytes(book.size)],
     book.series ? ['Series', book.series + (book.number ? ` #${book.number}` : '')] : null,
     book.progress.page ? ['Progress', progressText(book)] : null,
@@ -236,8 +236,8 @@ export async function openBookInfo(book, { onChange } = {}) {
     h('button', { class: 'btn', onClick: () => openTagPicker([book], { onChange }) }, icon('tag', 15), 'Tags'),
     h('button', { class: 'btn', onClick: () => openListPicker([book], { onChange }) }, icon('list', 15), 'Lists'),
     h('button', { class: 'btn', onClick: (e) => openWithMenu(e.currentTarget, { bookIds: [book.id] }, 1) }, icon('external', 15), 'Open with…'),
-    h('a', { class: 'btn', href: fileUrl(book, true) }, 'Download'),
-    store.info?.readOnly ? null : h('button', { class: 'btn', onClick: () => (m.close(), openRename([book], { onDone: () => (refreshMeta(), booksChanged()) })) }, icon('edit', 15), 'Rename…'),
+    book.isFolder ? null : h('a', { class: 'btn', href: fileUrl(book, true) }, 'Download'),
+    store.info?.readOnly || book.isFolder ? null : h('button', { class: 'btn', onClick: () => (m.close(), openRename([book], { onDone: () => (refreshMeta(), booksChanged()) })) }, icon('edit', 15), 'Rename…'),
   ].filter(Boolean);
 
   const body = h(

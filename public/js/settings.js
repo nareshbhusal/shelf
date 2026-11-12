@@ -81,7 +81,8 @@ try {
 
 /** What to call a book on screen: its file name (default) or the title found in its metadata. */
 export const stripExt = (filename) => filename.replace(/\.[^.]+$/, '');
-export const bookName = (b) => (settings.nameSource === 'metadata' ? b.title : stripExt(b.filename));
+// A lone comic in its own folder is called by the folder (that is the series); a folder of images has no extension to strip.
+export const bookName = (b) => b.group ?? (settings.nameSource === 'metadata' ? b.title : b.isFolder ? b.filename : stripExt(b.filename));
 
 const listeners = new Set();
 export const onSettings = (fn) => {

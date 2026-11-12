@@ -2,12 +2,15 @@ import { api, coverUrl, fileUrl } from './api.js';
 import { chip, openBookInfo, openListPicker, openTagPicker } from './dialogs.js';
 import { openWithMenu, readerMenuItems } from './openwith.js';
 import { openRename } from './rename.js';
+import { renameFolder, trashBooks, trashFolder } from './trash.js';
 import { bookName, onSettings, setSetting, settings, SORTS } from './settings.js';
 import { booksChanged, events, refreshMeta, store, subscribe, tagById } from './store.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
 import { ago, dirSegments, fmtBytes, h, hashFor, hueOf, icon, initials, plural, progressFraction } from './util.js';
 
 const openHref = (b) => hashFor('read', [String(b.id)]);
+/** From a folder listing, a lone comic in its own folder opens that folder (the series page); everywhere else it opens the reader. */
+const cardHref = (b, inDir) => (b.group && inDir !== null && inDir !== b.dir ? hashFor('files', dirSegments(b.dir)) : openHref(b));
 
 const finishedPct = (b) => Math.round(progressFraction(b) * 100);
 
@@ -93,7 +96,9 @@ export function createLibraryView(route) {
       if (dead || seq !== reqSeq) return;
       // A folder with 2+ comics is a series: ask where to carry on reading from.
       let ser = null;
-      if (ctx.kind === 'files' && route.query.get('r') !== '1' && ctx.dir !== '' && data.filter((b) => b.format === 'cbz').length >= 2) {
+      // (A folder whose only content is one comic is a series of one: it gets the same page.)
+      const comics = data.filter((b) => b.format === 'cbz');
+      if (ctx.kind === 'files' && route.query.get('r') !== '1' && ctx.dir !== '' && (comics.length >= 2 || (comics.length === 1 && comics[0].group && comics[0].dir === ctx.dir))) {
         ser = await api.get('/series?dir=' + encodeURIComponent(ctx.dir)).catch(() => null);
         if (dead || seq !== reqSeq) return;
       }
@@ -194,6 +199,21 @@ export function createLibraryView(route) {
         h('button', { class: 'btn small', title: 'Open every book in this list with one of your programs', onClick: (e) => openWithMenu(e.currentTarget, { listId: ctx.listId }, books.length) }, icon('external', 14), 'Open list with…'),
       );
     }
+    if (ctx.kind === 'files' && ctx.dir && canRename()) {
+      const dirName = ctx.dir.split('/').at(-1);
+      controls.append(
+        h('button', {
+          class: 'icon-btn',
+          title: 'This folder: rename or move to trash',
+          'aria-label': 'Folder actions',
+          onClick: (e) =>
+            popMenu(e.currentTarget, [
+              { label: 'Rename folder…', onClick: () => doRenameFolder(ctx.dir, dirName) },
+              { label: 'Move folder to trash…', danger: true, onClick: () => doTrashFolder(ctx.dir, dirName, loaded ? books.length : 0) },
+            ]),
+        }, icon('more', 18)),
+      );
+    }
     const view = settings.view;
     controls.append(
       h(
@@ -239,6 +259,7 @@ export function createLibraryView(route) {
       h('button', { class: 'btn small', onClick: () => openListPicker(picked(), { onChange: afterEdit(picked) }) }, icon('list', 14), 'Add to list'),
       h('button', { class: 'btn small', onClick: (e) => openWithMenu(e.currentTarget, { bookIds: [...selected] }, selected.size) }, icon('external', 14), 'Open with…'),
       canRename() ? h('button', { class: 'btn small', onClick: () => openRename(picked(), { onDone: afterRename }) }, icon('edit', 14), 'Rename…') : null,
+      canRename() ? h('button', { class: 'btn small danger', onClick: () => doTrashBooks(picked()) }, icon('trash', 14), 'Move to trash…') : null,
       isList
         ? h(
             'button',
@@ -284,6 +305,36 @@ export function createLibraryView(route) {
     refreshMeta();
     booksChanged(); // reload: names (and so order) changed
   };
+  /** After a folder was renamed or trashed: if this page was inside it, follow it (or step out to the parent). */
+  const leaveIfInside = (dir, to) => {
+    const here = ctx.dir ?? '';
+    if (here === dir || here.startsWith(dir + '/')) {
+      const target = to === null ? dir.split('/').slice(0, -1).join('/') : to + here.slice(dir.length);
+      location.hash = hashFor('files', dirSegments(target));
+    }
+  };
+  const afterFolderChange = async (dir, to) => {
+    selected.clear();
+    await refreshMeta();
+    leaveIfInside(dir, to);
+    booksChanged();
+  };
+  const doRenameFolder = async (dir, name) => {
+    const r = await renameFolder(dir, name);
+    if (r) await afterFolderChange(r.from, r.to);
+  };
+  const doTrashFolder = async (dir, name, total) => {
+    if (await trashFolder(dir, name, total)) await afterFolderChange(dir, null);
+  };
+  const doTrashBooks = async (list) => {
+    if (await trashBooks(list)) {
+      selected.clear();
+      const gone = list.filter((b) => b.group).map((b) => b.dir);
+      await refreshMeta();
+      for (const d of gone) leaveIfInside(d, null);
+      booksChanged();
+    }
+  };
   const afterEdit = (getBooks) => () => {
     for (const b of getBooks()) replaceCard(b);
     if (ctx.kind === 'all' && (route.query.get('tags') || route.query.get('untagged'))) load();
@@ -309,8 +360,9 @@ export function createLibraryView(route) {
   }
 
   function bookCard(book, index) {
+    const inDir = ctx.kind === 'files' && route.query.get('r') !== '1' && settings.groupComics ? ctx.dir : null;
     const pct = finishedPct(book);
-    const sub = isAdded ? `Added ${ago(book.addedAt)}` : book.author ?? (book.series ? book.series + (book.number ? ` #${book.number}` : '') : book.dir.split('/').at(-1) ?? '');
+    const sub = isAdded ? `Added ${ago(book.addedAt)}` : book.author ?? (book.series ? book.series + (book.number ? ` #${book.number}` : '') : book.group ? '' : book.dir.split('/').at(-1) ?? '');
     const check = h(
       'button',
       {
@@ -335,13 +387,15 @@ export function createLibraryView(route) {
           e.preventDefault();
           e.stopPropagation();
           popMenu(e.currentTarget, [
-            { label: 'Open', onClick: () => (location.hash = openHref(book)) },
+            { label: 'Open', onClick: () => (location.hash = cardHref(book, inDir)) },
             { label: 'Details', onClick: () => openBookInfo(book, { onChange: () => { replaceCard(book); } }) },
             { label: 'Tags…', onClick: () => openTagPicker([book], { onChange: afterEdit(() => [book]) }) },
             { label: 'Add to reading list…', onClick: () => openListPicker([book], { onChange: afterEdit(() => [book]) }) },
-            canRename() ? { label: 'Rename…', onClick: () => openRename([book], { onDone: afterRename }) } : null,
+            canRename() && !book.isFolder ? { label: 'Rename…', onClick: () => openRename([book], { onDone: afterRename }) } : null,
+            canRename() && book.group ? { label: 'Rename folder…', onClick: () => doRenameFolder(book.dir, book.group) } : null,
             ...readerMenuItems({ bookIds: [book.id] }, 1),
-            { label: 'Download', onClick: () => (location.href = fileUrl(book, true)) },
+            book.isFolder ? null : { label: 'Download', onClick: () => (location.href = fileUrl(book, true)) },
+            canRename() ? { label: 'Move to trash…', danger: true, onClick: () => doTrashBooks([book]) } : null,
           ].filter(Boolean));
         },
       },
@@ -352,7 +406,7 @@ export function createLibraryView(route) {
       'a',
       {
         class: 'card book' + (selected.has(book.id) ? ' selected' : ''),
-        href: openHref(book),
+        href: cardHref(book, inDir),
         dataset: { id: book.id, format: book.format },
         title: `${bookName(book)}\n${book.path}`,
         draggable: isList && listSort === 'manual',
@@ -373,7 +427,7 @@ export function createLibraryView(route) {
         { class: 'meta' },
         h('div', { class: 'title' }, bookName(book)),
         h('div', { class: 'sub' }, sub),
-        h('div', { class: 'row-info' }, h('span', null, book.pages ? `${book.pages} ${book.format === 'epub' ? 'sec' : 'p'}` : ''), h('span', null, fmtBytes(book.size)), h('span', null, book.dir)),
+        h('div', { class: 'row-info' }, h('span', null, book.pages ? `${book.format === 'epub' ? '~' : ''}${book.pages} p` : ''), h('span', null, fmtBytes(book.size)), h('span', null, book.group ? book.dir.split('/').slice(0, -1).join('/') : book.dir)),
         tagChips(book),
       ),
     );
@@ -389,24 +443,9 @@ export function createLibraryView(route) {
     old.replaceWith(fresh);
   }
 
-  function folderCard(d) {
-    const rec = route.query.get('r') === '1';
-    return h(
-      'a',
-      { class: 'card folder', href: hashFor('files', dirSegments(d.path), rec ? { r: 1 } : {}) },
-      h('div', { class: 'cover-wrap' }, h('div', { class: 'folder-art' }, icon('folder', 40))),
-      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, plural(d.total, 'book'))),
-    );
-  }
-
-  /** A folder holding 2+ comics: one card, named after the folder, covered by its first comic. */
-  function groupCard(d, info) {
-    const rec = route.query.get('r') === '1';
-    const pct = Math.floor((info.fraction ?? 0) * 100);
-    const img = h('img', { loading: 'lazy', decoding: 'async', alt: '', draggable: false });
-    img.src = coverUrl(info.cover);
-    img.addEventListener('error', () => img.remove());
-    const groupBooks = () => api.get('/books?dir=' + encodeURIComponent(d.path));
+  /** Rename / trash for a folder card (not for read-only libraries). */
+  function folderMore(d, total, extra = []) {
+    if (!canRename()) return null;
     const more = h(
       'button',
       {
@@ -418,16 +457,45 @@ export function createLibraryView(route) {
           e.stopPropagation();
           popMenu(e.currentTarget, [
             { label: 'Open', onClick: () => (location.hash = hashFor('files', dirSegments(d.path))) },
-            { label: `Tag all ${info.units}…`, onClick: async () => openTagPicker(await groupBooks(), { onChange: () => {} }) },
-            { label: `Add all ${info.units} to reading list…`, onClick: async () => openListPicker(await groupBooks(), { onChange: () => {} }) },
+            ...extra,
+            { label: 'Rename folder…', onClick: () => doRenameFolder(d.path, d.name) },
+            { label: 'Move folder to trash…', danger: true, onClick: () => doTrashFolder(d.path, d.name, total) },
           ]);
         },
       },
       icon('more', 16),
     );
+    return more;
+  }
+
+  function folderCard(d) {
+    const rec = route.query.get('r') === '1';
+    const more = folderMore(d, d.total);
     return h(
       'a',
-      { class: 'card folder group', href: hashFor('files', dirSegments(d.path), rec ? { r: 1 } : {}), title: `${d.name}\n${plural(info.units, 'comic')}`, onContextmenu: (e) => { e.preventDefault(); more.click(); } },
+      { class: 'card folder', href: hashFor('files', dirSegments(d.path), rec ? { r: 1 } : {}), onContextmenu: more ? (e) => { e.preventDefault(); more.click(); } : null },
+      h('div', { class: 'cover-wrap' }, h('div', { class: 'folder-art' }, icon('folder', 40)), more),
+      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, plural(d.total, 'book'))),
+    );
+  }
+
+  const groupCount = (info) => plural(info.units, 'comic') + (info.pages ? ` · ${info.pages.toLocaleString('en-US')} ${info.pages === 1 ? 'page' : 'pages'}` : '');
+
+  /** A folder holding 2+ comics: one card, named after the folder, covered by its first comic. */
+  function groupCard(d, info) {
+    const rec = route.query.get('r') === '1';
+    const pct = Math.floor((info.fraction ?? 0) * 100);
+    const img = h('img', { loading: 'lazy', decoding: 'async', alt: '', draggable: false });
+    img.src = coverUrl(info.cover);
+    img.addEventListener('error', () => img.remove());
+    const groupBooks = () => api.get('/books?dir=' + encodeURIComponent(d.path));
+    const more = folderMore(d, info.units, [
+      { label: `Tag all ${info.units}…`, onClick: async () => openTagPicker(await groupBooks(), { onChange: () => {} }) },
+      { label: `Add all ${info.units} to reading list…`, onClick: async () => openListPicker(await groupBooks(), { onChange: () => {} }) },
+    ]);
+    return h(
+      'a',
+      { class: 'card folder group', href: hashFor('files', dirSegments(d.path), rec ? { r: 1 } : {}), title: `${d.name}\n${groupCount(info)}`, onContextmenu: more ? (e) => { e.preventDefault(); more.click(); } : null },
       h(
         'div',
         { class: 'series-stack' },
@@ -440,7 +508,7 @@ export function createLibraryView(route) {
           pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null,
         ),
       ),
-      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${plural(info.units, 'comic')}${info.done ? `, ${info.done} read` : pct ? `, ${pct}%` : ''}`)),
+      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${groupCount(info)}${info.done ? `, ${info.done} read` : pct ? `, ${pct}%` : ''}`)),
     );
   }
 
@@ -537,7 +605,7 @@ export function createLibraryView(route) {
       'div',
       { class: 'series-panel' },
       h('a', { class: 'btn primary', href: hashFor('read', [String(s.state === 'done' ? s.parts[0].id : s.next)]), title: 'Opens the reader; the next part follows on without a break' }, icon('play', 14), label),
-      canRename() ? h('button', { class: 'btn', title: 'Rename all parts of this series with find & replace, numbering and more', onClick: () => openRename(s.parts, { onDone: afterRename }) }, icon('edit', 14), 'Rename parts…') : null,
+      canRename() && !s.parts.every((p) => p.isFolder) ? h('button', { class: 'btn', title: 'Rename all parts of this series with find & replace, numbering and more', onClick: () => openRename(s.parts, { onDone: afterRename }) }, icon('edit', 14), 'Rename parts…') : null,
       h(
         'div',
         { class: 'series-info' },

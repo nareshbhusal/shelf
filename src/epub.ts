@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { XMLParser } from 'fast-xml-parser';
-import { listEntries, readEntry } from './zip.js';
+import { listEntries, readEntries, readEntry } from './zip.js';
 
 export interface SpineItem {
   path: string; // entry name inside the zip
@@ -16,6 +16,8 @@ export interface TocItem {
 export interface EpubStructure {
   title?: string;
   spine: SpineItem[];
+  /** Characters of text in each spine item (set once text has been counted). */
+  chars?: number[];
   toc: TocItem[];
   rtl: boolean;
   entries: Set<string>;
@@ -120,6 +122,35 @@ function parseNcx(doc: Record<string, unknown>, ncxPath: string): TocItem[] {
   return points((ncx?.navMap as Record<string, unknown> | undefined)?.navPoint);
 }
 
+// A "page" of an EPUB is an estimate: ~1800 characters of text, about a paperback page. Sections made
+// of pictures (comics, fixed layouts) count one page each.
+export const CHARS_PER_PAGE = 1800;
+export const pagesFromChars = (chars: number[]) => Math.max(1, Math.round(chars.reduce((a, b) => a + b, 0) / CHARS_PER_PAGE));
+
+const BLOCK = /<\/?(?:p|div|br|h[1-6]|li|tr|section|blockquote|pre)\b[^>]*>/gi;
+function textChars(html: string): number {
+  let s = html.replace(/<(script|style)\b[\s\S]*?<\/\1>/gi, '').replace(/<head\b[\s\S]*?<\/head>/i, '');
+  const picture = /<(img|image|svg)\b/i.test(s);
+  s = s.replace(BLOCK, ' ').replace(/<[^>]*>/g, '').replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, '.').replace(/\s+/g, ' ').trim();
+  return picture && s.length < 200 ? CHARS_PER_PAGE : s.length;
+}
+
+/** Text length of every spine item, from one pass over the file. Items that can't be read are guessed from their size. */
+export async function countText(file: string, spine: SpineItem[]): Promise<number[]> {
+  const out = spine.map((s) => (s.kind === 'image' ? CHARS_PER_PAGE : Math.round(s.size * 0.45)));
+  const at = new Map<string, number[]>();
+  spine.forEach((s, i) => s.kind === 'doc' && at.set(s.path, [...(at.get(s.path) ?? []), i]));
+  try {
+    await readEntries(file, new Set(at.keys()), (name, data) => {
+      const n = textChars(data.toString('utf8'));
+      for (const i of at.get(name) ?? []) out[i] = n;
+    });
+  } catch {
+    /* keep the guesses */
+  }
+  return out.map((n) => Math.max(1, n));
+}
+
 const cache = new Map<string, EpubStructure>();
 
 /** Reading order and table of contents of an EPUB. Cached per book version (key = id + fingerprint). */
@@ -131,6 +162,7 @@ export async function epubStructure(key: string, file: string): Promise<EpubStru
     return hit;
   }
   const out = await readEpubStructure(file);
+  out.chars = await countText(file, out.spine);
   cache.set(key, out);
   while (cache.size > 12) cache.delete(cache.keys().next().value as string);
   return out;

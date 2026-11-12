@@ -30,7 +30,7 @@ export async function openFileInfo(book, ann) {
   add('Folder', info.dir ? h('a', { href: hashFor('files', dirSegments(info.dir)), onClick: () => m.close() }, info.dir) : h('a', { href: hashFor('files', []), onClick: () => m.close() }, '(top of the library)'));
   add('Format', info.format.toUpperCase());
   add('Size', `${fmtBytes(info.size)} (${info.size.toLocaleString()} bytes)`);
-  add(info.format === 'epub' ? 'Sections' : 'Pages', info.pages);
+  add(info.format === 'epub' ? 'Pages (estimated)' : 'Pages', info.pages && info.format === 'epub' ? `~${info.pages}` : info.pages);
   add('Modified', when(info.modifiedAt));
   add('Added to Shelf', when(info.addedAt));
   add('Shown as', bookName(info));

@@ -42,7 +42,9 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
 
   const backHref = hashFor('files', dirSegments(book.dir));
   let currentPage = 1;
-  let total = book.pages ?? 0;
+  let total = isEpub ? 0 : book.pages ?? 0; // (EPUB: number of sections; its pages are an estimate, see `estPages`)
+  let weights = null; // EPUB: text length of each section, so a position can be told as a fraction of the book
+  let estPages = book.pages ?? 0;
   let saveTimer = null;
   let currentPos = 0; // EPUB only: how far into the current section (0..1)
   let lastSaved = book.progress.page || 0;
@@ -76,7 +78,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
       h('button', { class: 'icon-btn', title: 'Next part (>)', onClick: () => goPart(1) }, icon('next', 16)),
     ),
     h('div', { class: 'reader-page' }, pageInput, pageTotal),
-    isEpub ? h('div', { class: 'epub-where muted', title: 'Section / how far through the book' }) : null,
+    isEpub ? h('div', { class: 'epub-where muted', title: 'Estimated page (about 1800 characters each) and how far through the book' }) : null,
     ann ? ann.toolbar : null,
     h('button', { class: 'icon-btn', title: 'File info (I)', onClick: () => openFileInfo(book, ann) }, icon('info', 18)),
     isEpub ? null : h('button', { class: 'icon-btn mode-btn', title: 'Reading mode (M)', onClick: () => toggleMode() }, icon('paged', 18)),
@@ -93,6 +95,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   const modeBtn = bar.querySelector('.mode-btn');
   const dirBtn = bar.querySelector('.dir-btn');
   const partWhere = bar.querySelector('.part-where');
+  // A small, quiet page counter in the corner; it stays when the toolbar is hidden.
+  const countEl = h('div', { class: 'reader-count' });
   // The browser tab says what you are reading, and where you are in it.
   function setTitles() {
     const name = bookName(book);
@@ -100,11 +104,22 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     titleEl.title = `${name}\n${book.path}`;
     const where = isEpub ? (total ? ` · ${bookPercent()}%` : '') : total ? ` · p. ${currentPage}/${total}` : '';
     document.title = `${name}${where} — ${appName()}`;
+    updateCount();
+  }
+  function epubWhere() {
+    return estPages ? `p. ~${clamp(Math.ceil(bookFraction() * estPages), 1, estPages)}/~${estPages} · ${bookPercent()}%` : `${bookPercent()}%`;
+  }
+  function updateCount() {
+    let t = '';
+    if (isEpub) t = weights ? epubWhere() : '';
+    else if (total && currentPage > 0) t = `${currentPage} / ${total}`;
+    countEl.textContent = t && parts ? `${bookName(book)} · ${t}` : t;
+    countEl.classList.toggle('hidden', !t);
   }
   setTitles();
   const unsubName = onSettings((k) => k === 'nameSource' && setTitles());
   const progressLine = h('div', { class: 'reader-progress' }, h('i'));
-  root.append(bar, scroller, progressLine);
+  root.append(bar, scroller, progressLine, countEl);
   if (ann) root.append(ann.drawer);
 
   // ---------------------------------------------------------------- shared behaviour
@@ -139,8 +154,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     if (!parts) return;
     seriesNav.classList.remove('hidden');
     progressLine.classList.add('series');
-    partWhere.textContent = `Part ${partIdx + 1}/${parts.length}`;
-    partWhere.title = `${parts.length} parts. ${Math.floor(seriesFraction() * 100)}% through the series`;
+    partWhere.textContent = `Part ${partIdx + 1}/${parts.length} · ${bookName(book)}`;
+    partWhere.title = `${bookName(book)}\n${parts.length} parts. ${Math.floor(seriesFraction() * 100)}% through the series`;
   }
   /** Jump to the start of the previous / next part. */
   function goPart(delta) {
@@ -171,6 +186,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     partIdx = i;
     partSince = Date.now();
     book = parts[i];
+    toast(bookName(book), 'quiet'); // say which part this is, whatever the reading mode
     total = book.pages ?? 0;
     currentPage = 0; // let the first page of this part through
     currentPos = 0;
@@ -182,7 +198,15 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     setTitles();
     showPart();
   }
-  function bookFraction() { return total ? clamp((currentPage - 1 + currentPos) / total, 0, 1) : 0; }
+  /** How far through the whole book a (section, spot in section) is, by amount of text. */
+  function fractionAt(sec, pos) {
+    if (!weights) return total ? clamp((sec - 1 + pos) / total, 0, 1) : 0;
+    const i = clamp(sec, 1, weights.length) - 1;
+    let before = 0;
+    for (let k = 0; k < i; k++) before += weights[k];
+    return clamp((before + pos * weights[i]) / weights.total, 0, 1);
+  }
+  function bookFraction() { return fractionAt(currentPage, currentPos); }
   function bookPercent() { return Math.floor(bookFraction() * 100); }
   const whereEl = bar.querySelector('.epub-where');
 
@@ -193,7 +217,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     const sectionChanged = page !== currentPage;
     currentPage = page;
     currentPos = pos;
-    if (whereEl) whereEl.textContent = `${currentPage}/${total} · ${bookPercent()}%`;
+    if (whereEl) whereEl.textContent = epubWhere();
+    updateCount();
     if (sectionChanged || bookPercent() !== lastPct) setTitles();
     lastPct = bookPercent();
     progressLine.firstChild.style.width = `${bookFraction() * 100}%`;
@@ -254,12 +279,13 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     if (currentPage === lastSaved && (pos === lastSavedPos || (!isEpub && Math.abs(pos - (lastSavedPos ?? 0)) < 0.02))) return;
     lastSaved = currentPage;
     lastSavedPos = pos;
-    book.progress = { ...book.progress, page: currentPage, pos, at: Date.now() };
+    const frac = isEpub ? Math.round(bookFraction() * 10000) / 10000 : undefined;
+    book.progress = { ...book.progress, page: currentPage, pos, at: Date.now(), ...(isEpub ? { frac } : {}) };
     // keepalive so it still goes through while the tab is closing
     fetch(`/api/books/${book.id}/progress`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ page: currentPage, pos }),
+      body: JSON.stringify({ page: currentPage, pos, frac }),
       keepalive: true,
     }).catch(() => {});
   }
@@ -438,7 +464,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   const resumeAt = explicit || (book.progress.page > 1 && (!book.pages || book.progress.page < book.pages) ? book.progress.page : 1);
   // EPUB: resume at section + fraction, unless the last section was already read to its end.
   const savedPos = book.progress.pos ?? 0;
-  const epubDone = book.pages && book.progress.page >= book.pages && savedPos >= 0.95;
+  const epubDone = (book.progress.frac ?? 0) >= 0.98;
 
   // What the page impls need to know about the shell. `mode`/`rtl` are read when they are created and again on every change.
   const env = {
@@ -457,7 +483,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
         if (book.dir) {
           const s = await api.get(`/series?dir=${encodeURIComponent(book.dir)}`).catch(() => null);
           const at = s?.parts.findIndex((p) => p.id === book.id) ?? -1;
-          if (at >= 0) {
+          if (at >= 0 && s.parts.length >= 2) {
             parts = s.parts;
             parts[at] = book; // the freshly loaded record
             partIdx = startIdx = at;
@@ -475,7 +501,13 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
       else if (isEpub) {
         impl = await epubImpl(book, {
           root, scroller, pagesEl, bar, report: setPosition, onKey, onClick: onReadClick,
-          setTotal: (n) => (total = n, setTitles()),
+          setTotal: (n, chars, pages) => {
+            total = n;
+            weights = chars;
+            weights.total = chars.reduce((a, b) => a + b, 0) || 1;
+            if (pages) estPages = pages;
+            setTitles();
+          },
         });
       } else throw new Error(`${book.format.toUpperCase()} files can't be read here yet`);
       if (dead) return impl.destroy();
@@ -488,7 +520,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
         const pos = explicit || epubDone ? 0 : savedPos;
         currentPage = 0; // force the first report through
         await impl.restore(at, pos);
-        if (!explicit && (at > 1 || pos > 0.02)) toast(`Resumed at ${Math.floor(((at - 1 + pos) / total) * 100)}%`, 'quiet');
+        if (!explicit && (at > 1 || pos > 0.02)) toast(`Resumed at ${Math.floor(fractionAt(at, pos) * 100)}%`, 'quiet');
       } else if (resumeAt > 1 || (!explicit && savedPos > 0.02 && !(book.pages && book.progress.page >= book.pages))) {
         // Back to the page you were on, and to the spot within it when we know that (older saves have only the page).
         const within = !explicit && book.progress.page === resumeAt ? savedPos : 0;

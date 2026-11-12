@@ -75,8 +75,9 @@ async function pdfCover(abs: string, tmpOut: string): Promise<void> {
 
 async function archiveCover(book: BookRow, abs: string): Promise<Buffer | null> {
   if (book.format === 'cbz') {
-    const pages = await comicPages(`${book.id}:${book.fingerprint}`, abs);
-    return pages.length ? readEntry(abs, pages[0]) : null;
+    const pages = await comicPages(`${book.id}:${book.fingerprint}`, abs, !!book.is_folder);
+    if (!pages.length) return null;
+    return book.is_folder ? fs.readFile(path.join(abs, pages[0])) : readEntry(abs, pages[0]);
   }
   if (book.format === 'epub') {
     const { coverEntry } = await epubInfo(abs);
