@@ -244,8 +244,9 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   a `.shelf-trash` folder inside your library, under a dated sub-folder that keeps its original path
   (`.shelf-trash/2026-11-12_21-05-00-ab12/manga/Series/Vol 1.cbz`). Nothing is erased, and the scan
   skips the trash. To undo, move it back out and rescan: Shelf recognises the book by its content, and its tags,
-  lists and progress come back. Empty the trash yourself when you want the space. A single-volume series card
-  deletes its folder with it. Refused in read-only mode.
+  lists and progress come back. Empty the trash yourself when you want the space. Trashing books leaves their
+  folder in place, even if it ends up empty (delete it yourself, or use "Move folder to trash…"). Refused in
+  read-only mode.
 - **Export data** (Settings > Storage & backup): a readable JSON file with your tags (colours, counts),
   reading lists in order, per-book tags/lists/progress, programs, display settings and the book index.
   (Progress for EPUBs is the section, the position inside it, and the fraction of the whole book.)
@@ -265,8 +266,10 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   stays as you left it. Keys: `+` `-` width, `0` fit window, `n` notes panel, `p` pen, `Ctrl+Z` /
   `Ctrl+Shift+Z` undo and redo, `i` file info, `Esc` back, `f` fullscreen; type a page number to jump. Progress is
   saved and resumed automatically, to the spot within the page (PDF, CBZ) or section (EPUB), not just the page.
-  A small page counter sits in the bottom-right corner (it stays when the toolbar is hidden); in a series it also
-  names the part, and a brief note appears when you cross into the next part.
+  A small page counter sits in the bottom-right corner (it stays when the toolbar is hidden). In a series the
+  toolbar says "Part 2/5" with the part's name under it, and the break between parts in continuous scroll reads
+  "Part 2 of 5" with the name below; with the toolbar hidden, a brief note names the part you crossed into.
+  Page turns in "one page at a time" mode glide; Settings > Reader > "Animate page turns" turns that off.
   EPUB-only keys: `t` contents, `[` `]` smaller/larger text, `←` `→` previous/next section. The (i) button shows everything about the file: location (copyable),
   size, dates, pages, tags, reading lists, progress, number of annotations, fingerprint and, for PDFs,
   version, producer and page size.

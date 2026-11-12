@@ -329,9 +329,7 @@ export function createLibraryView(route) {
   const doTrashBooks = async (list) => {
     if (await trashBooks(list)) {
       selected.clear();
-      const gone = list.filter((b) => b.group).map((b) => b.dir);
       await refreshMeta();
-      for (const d of gone) leaveIfInside(d, null);
       booksChanged();
     }
   };

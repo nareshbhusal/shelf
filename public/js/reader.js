@@ -113,7 +113,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     let t = '';
     if (isEpub) t = weights ? epubWhere() : '';
     else if (total && currentPage > 0) t = `${currentPage} / ${total}`;
-    countEl.textContent = t && parts ? `${bookName(book)} · ${t}` : t;
+    countEl.textContent = t;
     countEl.classList.toggle('hidden', !t);
   }
   setTitles();
@@ -154,7 +154,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     if (!parts) return;
     seriesNav.classList.remove('hidden');
     progressLine.classList.add('series');
-    partWhere.textContent = `Part ${partIdx + 1}/${parts.length} · ${bookName(book)}`;
+    partWhere.replaceChildren(h('span', null, `Part ${partIdx + 1}/${parts.length}`), h('small', { class: 'part-name' }, bookName(book)));
     partWhere.title = `${bookName(book)}\n${parts.length} parts. ${Math.floor(seriesFraction() * 100)}% through the series`;
   }
   /** Jump to the start of the previous / next part. */
@@ -186,7 +186,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     partIdx = i;
     partSince = Date.now();
     book = parts[i];
-    toast(bookName(book), 'quiet'); // say which part this is, whatever the reading mode
+    if (root.classList.contains('bar-off')) toast(`Part ${i + 1} of ${parts.length}: ${bookName(book)}`, 'quiet'); // the toolbar says it otherwise
     total = book.pages ?? 0;
     currentPage = 0; // let the first page of this part through
     currentPos = 0;
@@ -624,7 +624,7 @@ function pagedStrip(scroller, pagesEl, { getCount, getRtl, report, onResize }) {
     goTo(n, smooth) {
       measure();
       heading = { i: n - 1, t: Date.now() };
-      scroller.scrollTo({ left: (getRtl() ? -1 : 1) * (n - 1) * vw, top: 0, behavior: smooth ? 'smooth' : 'instant' });
+      scroller.scrollTo({ left: (getRtl() ? -1 : 1) * (n - 1) * vw, top: 0, behavior: smooth && settings.pagedAnimation !== false ? 'smooth' : 'instant' });
     },
     destroy() {
       clearTimeout(scrollTimer);
@@ -677,7 +677,7 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
       imgs.push(img);
       tracker.observe(img);
     }
-    const head = multi ? h('div', { class: 'part-head' }, h('span', null, bookName(part)), h('small', null, `Part ${i + 1} of ${list.length}`)) : null;
+    const head = multi ? h('div', { class: 'part-head' }, h('small', null, `Part ${i + 1} of ${list.length}`), h('span', null, bookName(part))) : null;
     if (multi && !count) imgs.push(h('div', { class: 'part-head' }, 'This part could not be read'));
     const nodes = head ? [head, ...imgs] : imgs;
     mounted.set(i, { nodes, imgs: imgs.filter((x) => x.tagName === 'IMG') });

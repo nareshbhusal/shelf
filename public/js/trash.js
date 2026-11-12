@@ -33,14 +33,11 @@ async function send(body) {
   }
 }
 
-/** Books are moved one by one; a comic that is the only content of its folder takes the folder with it. */
+/** Only the book files go; the folder they were in stays (an empty folder is harmless, and yours to delete). */
 export async function trashBooks(books) {
-  const dirs = [...new Set(books.filter((b) => b.group).map((b) => b.dir))];
-  const ids = books.filter((b) => !b.group).map((b) => b.id);
-  const what =
-    books.length === 1 ? `“${bookName(books[0])}”${books[0].group ? ' and its folder' : ''}` : `These ${books.length} books${dirs.length ? ' (and the folders of single-volume ones)' : ''}`;
+  const what = books.length === 1 ? `“${bookName(books[0])}”` : `These ${books.length} books`;
   if (!(await confirmDialog(sentence(what), { okLabel: 'Move to trash', danger: true }))) return false;
-  return send({ books: ids, dirs });
+  return send({ books: books.map((b) => b.id) });
 }
 
 export async function trashFolder(dir, name, total) {

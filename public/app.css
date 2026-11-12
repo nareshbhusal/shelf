@@ -483,8 +483,10 @@ html[data-reader-bg="paper"] .reader { --rbg: #e9e4d8; }
 @media (max-width: 720px) { .rename-rules { grid-template-columns: 1fr; } }
 
 /* A quiet page counter in the corner of every reader. */
-.reader-count { position: absolute; right: 10px; bottom: 8px; z-index: 5; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 9px; border-radius: 10px; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); background: color-mix(in srgb, var(--bg) 72%, transparent); opacity: .8; pointer-events: none; user-select: none; }
+.reader-count { position: absolute; right: 10px; bottom: 8px; z-index: 5; max-width: 60vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 9px; border-radius: 10px; font-size: 12px; font-variant-numeric: tabular-nums; color: #eceef3; background: rgba(18, 20, 26, .78); backdrop-filter: blur(3px); pointer-events: none; user-select: none; }
 .reader-count.hidden { display: none; }
-.part-where { display: inline-block; max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.part-where { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.2; max-width: 26ch; }
+.part-where > * { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.part-where .part-name { font-size: 11px; color: var(--fg); opacity: .75; }
 .reader.has-drawer .reader-count { right: 350px; }
 @media (max-width: 820px) { .reader.has-drawer .reader-count { right: 10px; } }
