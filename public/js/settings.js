@@ -1,7 +1,7 @@
 import { api } from './api.js';
-import { booksChanged, refreshInfo, refreshMeta, runScan, store } from './store.js';
+import { booksChanged, refreshInfo, refreshMeta, refreshSessions, runScan, store } from './store.js';
 import { confirmDialog, modal, toast } from './ui.js';
-import { fmtBytes, h } from './util.js';
+import { fmtBytes, h, icon } from './util.js';
 import { openReadersManager } from './readers.js';
 
 export const SORTS = [
@@ -13,6 +13,15 @@ export const SORTS = [
   ['pages', 'Pages'],
   ['read', 'Last read'],
 ];
+
+export const SIDEBAR_SECTIONS = [['browse', 'Browse'], ['folders', 'Folders'], ['lists', 'Reading lists (and sessions)'], ['tags', 'Tags']];
+/** The sidebar sections in the order chosen; unknown names are dropped and any that are missing go last. */
+export const sidebarOrder = () => {
+  const want = String(settings.sidebarOrder ?? '').split(',').filter((k) => SIDEBAR_SECTIONS.some(([x]) => x === k));
+  const seen = [...new Set(want)];
+  for (const [k] of SIDEBAR_SECTIONS) if (!seen.includes(k)) seen.push(k);
+  return seen;
+};
 
 // Adding a display option = adding one entry here, a CSS rule (or a line in applySettings), and you're done.
 // The settings dialog is generated from this table.
@@ -50,6 +59,9 @@ const SCHEMA = [
       { key: 'accent', label: 'Accent color', type: 'color', default: '#6c8cff' },
       { key: 'uiScale', label: 'Interface size', type: 'range', min: 85, max: 130, step: 5, unit: '%', default: 100 },
       { key: 'sidebarWidth', label: 'Sidebar width', type: 'range', min: 200, max: 400, step: 10, unit: 'px', default: 270 },
+      { key: 'sidebarOrder', label: 'Sidebar sections (top to bottom)', type: 'order', options: SIDEBAR_SECTIONS, default: SIDEBAR_SECTIONS.map(([k]) => k).join(','), stacked: true },
+      { key: 'sessionsEnabled', label: 'Use docsessions', type: 'checkbox', default: true, hidden: true },
+      { key: 'sessionsOpen', label: 'Sessions folded open under Reading lists', type: 'checkbox', default: true, hidden: true },
     ],
   },
   {
@@ -170,8 +182,35 @@ export function applySettings() {
   root.style.fontSize = `${(16 * s.uiScale) / 100}px`;
 }
 
+function orderControl(item) {
+  const box = h('div', { class: 'order-list' });
+  const draw = () => {
+    const cur = sidebarOrder();
+    box.replaceChildren(
+      ...cur.map((k, i) =>
+        h(
+          'div',
+          { class: 'order-row' },
+          h('span', { class: 'grow' }, item.options.find(([x]) => x === k)?.[1] ?? k),
+          h('button', { class: 'icon-btn', title: 'Move up', 'aria-label': 'Move up', disabled: i === 0, onClick: () => move(i, -1) }, icon('up', 14)),
+          h('button', { class: 'icon-btn', title: 'Move down', 'aria-label': 'Move down', disabled: i === cur.length - 1, onClick: () => move(i, 1) }, icon('down', 14)),
+        ),
+      ),
+    );
+  };
+  const move = (i, d) => {
+    const cur = sidebarOrder();
+    [cur[i], cur[i + d]] = [cur[i + d], cur[i]];
+    setSetting(item.key, cur.join(','));
+    draw();
+  };
+  draw();
+  return box;
+}
+
 function control(item) {
   const cur = settings[item.key];
+  if (item.type === 'order') return orderControl(item);
   if (item.type === 'select') {
     return h(
       'select',
@@ -232,8 +271,8 @@ export function openSettings() {
       'section',
       { class: 'set-group' },
       h('h3', null, g.group),
-      g.items.map((it) =>
-        h('div', { class: 'set-row' }, h('label', null, it.label), control(it)),
+      g.items.filter((it) => !it.hidden).map((it) =>
+        h('div', { class: 'set-row' + (it.stacked ? ' stacked' : '') }, h('label', null, it.label), control(it)),
       ),
     ),
   );
@@ -323,6 +362,51 @@ export function openSettings() {
     h('div', { class: 'btn-row' }, h('button', { class: 'btn', onClick: () => openReadersManager() }, 'Manage programs…')),
   );
 
+  // docsessions: an external app, on or off like any other.
+  const apps = (() => {
+    const box = h('section', { class: 'set-group' }, h('h3', null, 'docsessions (PDF viewer sessions)'));
+    const status = h('div', { class: 'muted small' });
+    const draw = async () => {
+      const inf = store.info;
+      if (!inf?.sessionsConfigured) {
+        box.replaceChildren(
+          h('h3', null, 'docsessions (PDF viewer sessions)'),
+          h('div', { class: 'muted small' }, 'Not set up. Tell Shelf how to run it with the "sessions" key of the shelf file, the --sessions option or SHELF_SESSIONS, then restart Shelf.'),
+        );
+        return;
+      }
+      const on = !!inf.sessions;
+      const cb = h('input', { type: 'checkbox', checked: on, id: 'sessions-on' });
+      cb.addEventListener('change', async () => {
+        cb.disabled = true;
+        try {
+          await api.patch('/settings', { sessionsEnabled: cb.checked });
+          settings.sessionsEnabled = cb.checked;
+          await refreshInfo();
+          if (cb.checked) await refreshSessions();
+          else { store.sessions = null; store.sessionsError = ''; }
+          if (!cb.checked && /^#\/session\//.test(location.hash)) location.hash = '#/files';
+        } catch (e) { toast(e.message, 'error'); }
+        draw();
+      });
+      box.replaceChildren(
+        h('h3', null, 'docsessions (PDF viewer sessions)'),
+        h('div', { class: 'set-row' }, h('label', { for: 'sessions-on' }, 'Use docsessions with Shelf'), cb),
+        h('div', { class: 'muted small' }, 'Command: ', h('code', null, inf.sessionsCommand)),
+        status,
+      );
+      if (!on) { status.textContent = 'Off: the Sessions sidebar section, “Add to session” and “Open in a viewer” are hidden. Linked lists keep their link and wake up when you turn it back on. Session files are never touched either way.'; return; }
+      status.textContent = 'Checking…';
+      try {
+        const d = await api.get('/sessions');
+        const vs = (d.viewers ?? []).filter((v) => v.installed).map((v) => v.display_name || v.id);
+        status.textContent = `Working: ${d.sessions.length} session${d.sessions.length === 1 ? '' : 's'}; viewers installed: ${vs.join(', ') || 'none'}.`;
+      } catch (e) { status.textContent = `Not working: ${e.message}`; }
+    };
+    draw();
+    return box;
+  })();
+
   const backup = h(
     'section',
     { class: 'set-group' },
@@ -350,5 +434,5 @@ export function openSettings() {
       : null,
   );
 
-  const m = modal({ title: 'Display & settings', body: [...sections, programs, backup, maintenance], wide: true });
+  const m = modal({ title: 'Display & settings', body: [...sections, programs, apps, backup, maintenance], wide: true });
 }

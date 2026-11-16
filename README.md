@@ -225,7 +225,14 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   lists, reading progress and covers stay with it; a toast offers **Undo** afterwards.
 - **Search** (press `/`) matches title, author, series, file name, path and tag names.
 - **Reading lists** keep a manual order; drag cards to reorder. "Open list with…" in a list's header
-  sends the whole list, in order, to one of your programs.
+  sends the whole list, in order, to one of your programs. To fill a list: type in the field at the top of its
+  page (results can be picked with the mouse or Enter, several in a row; a pasted link or path works too),
+  or drag books in: cards from any page or tab, a book's link, files from your desktop (matched to the library
+  by name and size), or a folder path. Dropped on a card they land there; dropped on a list in the sidebar they
+  are added to it. A card's ✕ button, its menu, or Delete on a selection removes books from the list (the files
+  are untouched). "Copy this list" in the list's ⋯ menu makes an independent copy.
+- **Sidebar order**: Settings > Appearance reorders Browse, Folders, Reading lists (with Sessions folded under
+  it) and Tags.
 - **Open with your own programs** (Settings > Programs): two separate sets, one for books (the
   "Open with" menu on books and selections) and one for reading lists ("Open list with…"). Give each a
   name and a command, for example
@@ -387,9 +394,20 @@ none of this appears. If the program can't be found Shelf says so in the sidebar
   and is left alone.
 - **Add to session** is in a book's menu and in the selection bar; you can also type a new session name.
   Only PDF, EPUB and CBZ files can be sent. Loose-image comic folders are skipped and counted in the message.
-- **Reading lists.** "Import as reading list" makes a list from the session's matched books, in session
-  order, and links the two; "Update reading list" refreshes it (the import is one way: session → list).
-  A list's menu has "Send to a session…", which creates a new session from the list and links it.
+- **Viewers.** The list of viewers (Okular, qpdfview…) comes from `docsessions list --json`; Shelf offers the
+  installed ones. The arrow next to "Open in …" on a session page, on a reading list's page and in a list's menu
+  picks the viewer. Choosing one switches the session to it for good (docsessions' rule) and is refused with
+  docsessions' own message if the viewer can't open one of the documents (an EPUB in qpdfview, say).
+- **Reading lists and sessions.** "Import linked" makes a reading list from the session's matched books and ties
+  the two together; "Import a copy" (and "Copy this list" on any list) makes an independent list. A tied pair is
+  marked with a link badge in the sidebar and a bar on both pages: *Update list from session* replaces the list
+  with the session's documents; *Update session from list* adds the list's books to the session and drops those
+  the list no longer has (when the session isn't open; documents Shelf doesn't know are always kept; the order
+  is not forced). *Unlink* keeps both. They are never changed behind your back. "Open in …" on a list creates the
+  session the first time, then updates the tied one before opening it.
+- **Turning it on and off.** docsessions is an external app: Settings has a switch for it. Off hides every
+  trace of it (sidebar, menus, badges) and refuses its routes; links are kept and wake up when it is on again.
+  Without the command configured, the switch isn't offered.
 - **While a session is open** its documents follow the viewer: adding is allowed and goes into a queue that
   applies on Restart; removing or moving an open document and deleting the session are refused (docsessions'
   rule). Documents whose file doesn't exist yet are listed under "Waiting for the file".

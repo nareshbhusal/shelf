@@ -136,7 +136,8 @@ CREATE TABLE IF NOT EXISTS lists (
   id           INTEGER PRIMARY KEY,
   name         TEXT NOT NULL,
   created_at   INTEGER NOT NULL,
-  session_uuid TEXT
+  session_uuid TEXT,
+  session_rev INTEGER
 );
 CREATE TABLE IF NOT EXISTS list_items (
   list_id  INTEGER NOT NULL REFERENCES lists(id) ON DELETE CASCADE,
@@ -170,6 +171,9 @@ if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).s
 if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'progress_frac')) {
   db.exec('ALTER TABLE books ADD COLUMN progress_frac REAL');
 }
+if (!(db.prepare('PRAGMA table_info(lists)').all() as Array<{ name: string }>).some((c) => c.name === 'session_rev')) {
+  db.exec('ALTER TABLE lists ADD COLUMN session_rev INTEGER');
+}
 if (!(db.prepare('PRAGMA table_info(lists)').all() as Array<{ name: string }>).some((c) => c.name === 'session_uuid')) {
   db.exec('ALTER TABLE lists ADD COLUMN session_uuid TEXT');
 }
@@ -184,4 +188,4 @@ if (!(db.prepare('PRAGMA table_info(readers)').all() as Array<{ name: string }>)
 }
 // Highlights/notes are stored inside the PDFs themselves, never here. (Earlier dev builds had a table for them.)
 db.exec('DROP TABLE IF EXISTS annotations');
-db.pragma('user_version = 9');
+db.pragma('user_version = 10');

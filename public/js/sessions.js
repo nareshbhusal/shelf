@@ -11,6 +11,108 @@ const STATE = { stopped: 'Not open', starting: 'Opening…', running: 'Open in v
 const sessionById = (id) => store.sessions?.sessions.find((s) => s.uuid === id) ?? null;
 const sessionName = (s) => s.display_name || s.name || 'Session';
 
+const viewerById = (id) => store.sessions?.viewers?.find((v) => v.id === id) ?? null;
+export const viewerName = (id) => viewerById(id)?.display_name || id || 'viewer';
+const extOf = (p) => (p.match(/\.([^./\\]+)$/)?.[1] ?? '').toLowerCase();
+const supports = (v, exts) => !Array.isArray(v.extensions) || !v.extensions.length || exts.every((e) => v.extensions.some((x) => String(x).replace(/^\./, '').toLowerCase() === e));
+
+/**
+ * The viewers docsessions says are installed, as popup-menu items. `paths` (optional) are the documents that
+ * will be opened: a viewer that can't open one of them is shown but disabled, with the reason.
+ */
+export function viewerItems({ current, verb = 'Open in', paths = null, pick }) {
+  const exts = paths ? [...new Set(paths.map(extOf))] : null;
+  const list = (store.sessions?.viewers ?? []).filter((v) => v.installed);
+  if (!list.length) return [{ label: 'No viewer is installed', disabled: true, onClick() {} }];
+  return list.map((v) => {
+    const multi = v.multi_document === false && paths && paths.length > 1;
+    const bad = exts && !supports(v, exts);
+    return {
+      label: `${v.id === current ? '✓ ' : ''}${verb} ${v.display_name || v.id}${v.default ? '  (default)' : ''}`,
+      disabled: multi || bad,
+      title: multi ? 'This viewer opens one document at a time' : bad ? `${v.display_name || v.id} can't open every document here (${exts.join(', ')})` : undefined,
+      onClick: () => pick(v.id),
+    };
+  });
+}
+
+/** Open a reading list in a viewer through docsessions (a session is made for it the first time and stays linked). */
+export async function openListInViewer(list, viewer, { restart = false } = {}) {
+  const r = await change(() => api.post(`/lists/${list.id}/session`, { viewer, open: true, restart }));
+  if (!r) return null;
+  const bits = [];
+  if (r.created) bits.push(`new session with ${plural(r.added, 'document')}`);
+  else {
+    if (r.added) bits.push(`${r.added} added to the session`);
+    if (r.removed) bits.push(`${r.removed} removed from it`);
+  }
+  if (r.skipped) bits.push(`${r.skipped} left out (PDF, EPUB and CBZ only)`);
+  bits.push(r.opened || r.created ? `opened in ${viewerName(r.session.viewer)}` : 'already open (use Restart to apply changes)');
+  toast(`“${list.name}”: ${bits.join(', ')}`);
+  await Promise.all([refreshSessions(), refreshMeta()]);
+  return r;
+}
+
+/** Bring a linked session in line with its list, without opening it. */
+export async function updateSessionFromList(list) {
+  const r = await change(() => api.post(`/lists/${list.id}/session`, {}));
+  if (!r) return null;
+  toast(`Session updated: ${r.added} added, ${r.removed} removed${r.skipped ? `, ${r.skipped} left out` : ''}`);
+  await Promise.all([refreshSessions(), refreshMeta()]);
+  return r;
+}
+
+export async function unlinkList(list) {
+  const r = await change(() => api.post(`/lists/${list.id}/unlink`, {}));
+  if (r) await Promise.all([refreshSessions(), refreshMeta()]);
+  return r;
+}
+
+export async function copyList(list) {
+  const r = await change(() => api.post(`/lists/${list.id}/copy`, {}));
+  if (!r) return null;
+  await refreshMeta();
+  toast(`Copied to “${r.name}”`, '', { action: { label: 'Show', onClick: () => (location.hash = hashFor('list', [String(r.id)])) } });
+  return r;
+}
+
+/**
+ * The strip shown on a list page and on its session's page that says the two are tied together, with what
+ * to do about it. `list` and `session` are what the store currently holds.
+ */
+export function linkBar({ list, session, onDone }) {
+  if (!list?.sessionUuid) return null;
+  const done = () => onDone?.();
+  const stale = session && list.sessionRev !== null && list.sessionRev !== undefined && session.rev !== list.sessionRev;
+  const busyBtn = (label, fn, title) => {
+    const b = h('button', { class: 'btn small', title, onClick: async () => { b.disabled = true; try { await fn(); } finally { b.disabled = false; done(); } } }, label);
+    return b;
+  };
+  return h(
+    'div',
+    { class: 'linkbar' },
+    h('span', { class: 'linkbar-ic' }, icon('link', 16)),
+    h(
+      'div',
+      { class: 'linkbar-text' },
+      session
+        ? h('div', null, 'Linked with session ', h('a', { href: hashFor('session', [session.uuid]) }, sessionName(session)), h('span', { class: 'spill ' + session.state }, STATE[session.state]))
+        : h('div', null, 'Linked with a session that docsessions no longer lists'),
+      h('div', { class: 'muted small' }, stale ? 'The session has changed since the two were last matched.' : 'Matched up when last updated. The two are not kept in step automatically.'),
+    ),
+    h(
+      'div',
+      { class: 'linkbar-act' },
+      session ? busyBtn('Update list from session', async () => {
+        const r = await change(() => api.post(`/sessions/${session.uuid}/import`, { mode: 'update' }));
+        if (r) { await Promise.all([refreshMeta(), refreshSessions()]); toast(`List updated: ${plural(r.imported, 'book')}${r.unmatched ? `; ${r.unmatched} not in this library left out` : ''}`); }
+      }, 'Replace this list’s books with the session’s documents') : null,
+      session ? busyBtn('Update session from list', () => updateSessionFromList(list), 'Add the list’s books to the session and drop those the list no longer has (documents Shelf doesn’t know are kept)') : null,
+      busyBtn('Unlink', () => unlinkList(list), 'Keep both, but stop treating them as one'),
+    ),
+  );
+}
+
 /** A short sentence for what an add did. */
 function addedText(name, r) {
   const c = r.changes ?? {};
@@ -86,7 +188,7 @@ export async function openSessionPicker(target) {
 
 export function createSessionView(route) {
   const uuid = route.rest[0] ?? '';
-  const root = h('div', { class: 'session-page' });
+  const root = h('div', { class: 'library session-page' });
   let s = null;
   let dead = false;
   let loaded = false;
@@ -123,8 +225,9 @@ export function createSessionView(route) {
   const act = (action, body = {}) => edit(() => api.post(`/sessions/${uuid}/${action}`, { ...body, rev: s.rev }));
   const post = (path, body) => edit(() => api.post(`/sessions/${uuid}/${path}`, { ...body, ...rev() }));
 
-  async function open(action) {
-    const r = await edit(() => api.post(`/sessions/${uuid}/${action}`, {}));
+  async function open(action, viewer) {
+    const r = await edit(() => api.post(`/sessions/${uuid}/${action}`, viewer ? { viewer } : {}));
+    if (r && viewer && viewer !== s?.viewer) toast(`This session now opens in ${viewerName(viewer)}`, 'quiet');
     if (r && r.applied?.length) toast(`${plural(r.applied.length, 'queued document')} opened`);
     if (r && r.bound === false) toast('The viewer was started, but its window was not seen yet.', 'quiet');
   }
@@ -151,7 +254,7 @@ export function createSessionView(route) {
     await Promise.all([refreshMeta(), refreshSessions()]);
     s = sessionById(uuid);
     render();
-    toast(`${mode === 'update' ? 'Updated' : 'Created'} the reading list with ${plural(r.imported, 'book')}${r.unmatched ? `; ${r.unmatched} not in this library were left out` : ''}`, '', {
+    toast(`${mode === 'update' ? 'Updated' : mode === 'copy' ? 'Copied into a new' : 'Created'} the reading list with ${plural(r.imported, 'book')}${r.unmatched ? `; ${r.unmatched} not in this library were left out` : ''}`, '', {
       action: { label: 'Show', onClick: () => (location.hash = hashFor('list', [String(r.listId)])) },
     });
   }
@@ -200,35 +303,82 @@ export function createSessionView(route) {
       );
     }
     const running = s.state !== 'stopped';
-    const unmatched = s.total - s.matched;
-    root.replaceChildren(
-      ...[
+    const allPaths = [...s.files, ...s.pending, ...s.lost].map((m) => m.path);
+    const list = s.listId ? store.lists.find((l) => l.id === s.listId) : null;
+    const pickViewer = (anchor, verb, action) =>
+      popMenu(anchor, viewerItems({ current: s.viewer, verb, paths: allPaths, pick: (v) => open(action, v) }));
+    const caret = (verb, action) =>
+      h('button', { class: 'btn ' + (running ? '' : 'primary ') + 'caret', disabled: busy || (!running && !s.total), title: 'Choose the viewer', 'aria-label': 'Choose the viewer', onClick: (e) => pickViewer(e.currentTarget, verb, action) }, icon('chevron', 12));
+    const moreMenu = (e) =>
+      popMenu(e.currentTarget, [
+        { label: 'Rename…', onClick: rename },
+        s.matched ? { label: 'Import as a copy (reading list not linked)', onClick: () => importList('copy') } : null,
+        s.listId ? { label: 'Open reading list', onClick: () => (location.hash = hashFor('list', [String(s.listId)])) } : null,
+        '-',
+        { label: 'Delete session…', danger: true, disabled: running, onClick: del },
+      ].filter(Boolean));
+
+    const head = h(
+      'div',
+      { class: 'lib-head' },
       h(
         'div',
-        { class: 'lib-head' },
-        h('div', { class: 'crumbs' }, icon('session', 18), h('span', { class: 'cur' }, sessionName(s)), h('span', { class: 'spill ' + s.state }, STATE[s.state])),
-        h(
-          'div',
-          { class: 'controls' },
-          running
-            ? [
-                h('button', { class: 'btn', disabled: busy, onClick: () => open('restart'), title: s.pending.length ? `Close and open again so the ${s.pending.length} queued document${s.pending.length === 1 ? '' : 's'} appear` : 'Close and open again' }, 'Restart'),
-                h('button', { class: 'btn', disabled: busy, onClick: close }, 'Close'),
-              ]
-            : h('button', { class: 'btn primary', disabled: busy || !s.total, onClick: () => open('open') }, icon('play', 14), 'Open in ' + s.viewer),
-          s.listId
-            ? h('button', { class: 'btn', disabled: busy, onClick: () => importList('update'), title: 'Replace the linked reading list with this session’s documents, in order' }, 'Update reading list')
-            : h('button', { class: 'btn', disabled: busy || !s.matched, onClick: () => importList('new'), title: 'Make a reading list from the documents of this session that are in the library' }, 'Import as reading list'),
-          h('button', { class: 'icon-btn', title: 'More', 'aria-label': 'Session options', onClick: (e) => popMenu(e.currentTarget, [{ label: 'Rename…', onClick: rename }, s.listId ? { label: 'Open reading list', onClick: () => (location.hash = hashFor('list', [String(s.listId)])) } : null, '-', { label: 'Delete session…', danger: true, disabled: running, onClick: del }].filter(Boolean)) }, icon('more', 18)),
-          h('button', { class: 'icon-btn', title: 'Reload from docsessions', onClick: reload }, icon('refresh', 18)),
-        ),
+        { class: 'lib-title' },
+        h('h1', null, icon('session', 20), sessionName(s)),
+        h('span', { class: 'spill ' + s.state }, h('i', { class: 'dot' + (running ? ' live' : '') }), STATE[s.state]),
       ),
-      h('p', { class: 'muted sline' }, `${s.viewer} · ${plural(s.total, 'document')} · changed ${s.last_update ? ago(new Date(s.last_update).getTime()) : ''}${unmatched ? ` · ${unmatched} not in this library` : ''}`),
-      running ? h('p', { class: 'muted snote' }, 'This session is open in the viewer, so its documents follow what the viewer has open. Documents you add now are queued and appear at the next start; Restart applies them.') : null,
-      section('Documents', null, s.files, 'files') ?? h('div', { class: 'muted pad' }, 'No documents yet. Use “Add to session” on books, or send a reading list here.'),
-      section('Queued', 'Added while the session was open; they open at the next start.', s.pending, 'pending'),
-      section('Waiting for the file', 'These paths did not exist when last tried. They are retried every time the session starts.', s.lost, 'lost'),
-    ].filter(Boolean));
+      h(
+        'div',
+        { class: 'lib-controls' },
+        running
+          ? h(
+              'div',
+              { class: 'split' },
+              h('button', { class: 'btn', disabled: busy, onClick: () => open('restart'), title: s.pending.length ? `Close and open again so the ${s.pending.length} queued document(s) join` : 'Close and open again' }, icon('refresh', 14), 'Restart'),
+              caret('Restart in', 'restart'),
+            )
+          : h(
+              'div',
+              { class: 'split' },
+              h('button', { class: 'btn primary', disabled: busy || !s.total, onClick: () => open('open') }, icon('play', 14), 'Open in ' + viewerName(s.viewer)),
+              caret('Open in', 'open'),
+            ),
+        running ? h('button', { class: 'btn', disabled: busy, onClick: close }, 'Close') : null,
+        h('button', { class: 'icon-btn', title: 'More', 'aria-label': 'Session options', onClick: moreMenu }, icon('more', 18)),
+        h('button', { class: 'icon-btn', title: 'Reload from docsessions', 'aria-label': 'Reload', onClick: reload }, icon('refresh', 18)),
+      ),
+    );
+
+    const meta = h('p', { class: 'muted sline' }, [
+      `${viewerName(s.viewer)} · ${plural(s.total, 'document')}`,
+      s.last_update ? ` · changed ${ago(new Date(s.last_update).getTime())}` : '',
+      s.total > s.matched ? ` · ${s.total - s.matched} not in this library` : '',
+    ].join(''));
+
+    const linkEl = list
+      ? linkBar({ list, session: s, onDone: () => { s = sessionById(uuid); render(); } })
+      : h(
+          'div',
+          { class: 'linkbar off' },
+          h('span', { class: 'linkbar-ic' }, icon('list', 16)),
+          h('div', { class: 'linkbar-text' }, h('div', null, 'Not tied to a reading list'), h('div', { class: 'muted small' }, 'Make a reading list from this session’s documents. “Linked” keeps the two connected so you can update either from the other; a copy is independent.')),
+          h('div', { class: 'linkbar-act' },
+            h('button', { class: 'btn small', disabled: busy || !s.matched, onClick: () => importList('new'), title: 'Create a reading list that stays linked to this session' }, icon('link', 14), 'Import linked'),
+            h('button', { class: 'btn small', disabled: busy || !s.matched, onClick: () => importList('copy'), title: 'Create a separate reading list; nothing is linked' }, icon('copy', 14), 'Import a copy'),
+          ),
+        );
+
+    root.replaceChildren(
+      ...[
+        head,
+        meta,
+        linkEl,
+        running ? h('p', { class: 'callout snote' }, 'This session is open in the viewer, so its documents follow what the viewer has open. Documents you add now are queued and appear at the next start; Restart applies them.') : null,
+        section('Documents', null, s.files, 'files') ?? h('div', { class: 'empty small' }, icon('book', 28), h('p', null, 'No documents yet. Use “Add to session” on books, or send a reading list here.')),
+        section('Queued', 'Added while the session was open; they open at the next start.', s.pending, 'pending'),
+        section('Waiting for the file', 'These paths did not exist when last tried. They are retried every time the session starts.', s.lost, 'lost'),
+      ].filter(Boolean),
+    );
   }
 
   const unsub = subscribe(() => {});

@@ -374,7 +374,8 @@ app.get('/api/books', (req, res) => {
   rows.sort((a, b) => fn(a, b) * dirSign);
 
   const tags = tagMap();
-  res.json(rows.map((r) => bookDTO(r, tags, singles)));
+  const limit = Math.floor(Number(qstr(req.query.limit)) || 0);
+  res.json((limit > 0 ? rows.slice(0, Math.min(limit, 500)) : rows).map((r) => bookDTO(r, tags, singles)));
 });
 
 app.get('/api/books/:id', (req, res) => {
@@ -599,8 +600,11 @@ app.post('/api/trash', async (req, res) => {
 
 // ---------- sessions (docsessions); everything goes through its command line, see sessions.ts ----------
 
+// docsessions is an external app: it needs its command configured, and can be switched off in Settings.
+const sessionsOn = () => SESSIONS_CMD.length > 0 && readSettings().sessionsEnabled !== false;
 const needSessions = () => {
   if (!SESSIONS_CMD.length) throw new HttpError(404, 'Sessions are not set up. Add "sessions" to the shelf file.');
+  if (!sessionsOn()) throw new HttpError(404, 'docsessions is turned off (Settings → Apps).');
 };
 const sessionId = (v: unknown) => {
   const id = String(v ?? '');
@@ -620,7 +624,7 @@ const sessionName = (v: unknown) => {
 };
 
 app.get('/api/sessions', async (_req, res) => {
-  if (!SESSIONS_CMD.length) return res.json({ enabled: false });
+  if (!sessionsOn()) return res.json({ enabled: false });
   res.json({ enabled: true, ...(await listSessions()) });
 });
 
@@ -638,12 +642,12 @@ app.post('/api/sessions', async (req, res) => {
   }
   const { paths, skipped } = pathsFor(ids);
   if (!paths.length) throw new HttpError(400, 'None of these books can be opened by a PDF viewer (it needs PDF, EPUB or CBZ files).');
-  const viewer = typeof req.body?.viewer === 'string' && /^[\w.-]+$/.test(req.body.viewer) ? [`--viewer=${req.body.viewer}`] : [];
+  const viewer = viewerArgs(req.body?.viewer);
   const d = await ds(['create', ...(name ? [`--name=${name}`] : []), ...viewer, ...(req.body?.open ? ['--open'] : []), ...paths], req.body?.open ? 40_000 : 15_000);
   const session = one(d);
   if (listId !== undefined && !db.prepare('SELECT 1 FROM lists WHERE session_uuid = ?').get(session.uuid)) {
     // A list sent over stays tied to its session (a list is tied to one session only).
-    db.prepare('UPDATE lists SET session_uuid = ? WHERE id = ? AND session_uuid IS NULL').run(session.uuid, toInt(listId));
+    db.prepare('UPDATE lists SET session_uuid = ?, session_rev = ? WHERE id = ? AND session_uuid IS NULL').run(session.uuid, session.rev ?? null, toInt(listId));
   }
   res.json({ session, skipped });
 });
@@ -671,6 +675,12 @@ app.post('/api/sessions/:uuid/move', async (req, res) => {
   res.json({ session: one(d), changes: d.changes });
 });
 
+const viewerArgs = (v: unknown): string[] => {
+  if (v === undefined || v === null || v === '') return [];
+  if (typeof v !== 'string' || !/^[\w.-]{1,60}$/.test(v)) throw new HttpError(400, 'bad viewer');
+  return [`--viewer=${v}`];
+};
+
 const ACTION_TIMEOUT: Record<string, number> = { open: 35_000, restart: 45_000, close: 20_000, rename: 15_000, delete: 15_000 };
 app.post('/api/sessions/:uuid/:action', async (req, res, next) => {
   const action = req.params.action;
@@ -682,6 +692,7 @@ app.post('/api/sessions/:uuid/:action', async (req, res, next) => {
   if (action === 'rename') args.push(sessionName(req.body?.name));
   if (action === 'delete') args.push('--yes');
   if (action === 'close' && req.body?.force) args.push('--force');
+  if (action === 'open' || action === 'restart') args.push(...viewerArgs(req.body?.viewer));
   if (action === 'rename' || action === 'delete') args.push(...revArgs(req.body?.rev));
   const d = await ds(args, ACTION_TIMEOUT[action]);
   if (action === 'delete') db.prepare('UPDATE lists SET session_uuid = NULL WHERE session_uuid = ?').run(id);
@@ -694,20 +705,143 @@ app.post('/api/sessions/:uuid/import', async (req, res) => {
   const id = sessionId(req.params.uuid);
   const found = (await listSessions()).sessions.find((s: SessionOut) => s.uuid === id);
   if (!found) throw new HttpError(404, 'session not found');
-  const mode = req.body?.mode === 'update' ? 'update' : 'new';
+  const mode = req.body?.mode === 'update' ? 'update' : req.body?.mode === 'copy' ? 'copy' : 'new';
   const books = [...found.files, ...found.pending].map((m) => m.bookId).filter((b): b is number => b !== null);
   const unique = [...new Set(books)];
   const unmatched = found.total - found.lost.length - books.length;
   let listId = (db.prepare('SELECT id FROM lists WHERE session_uuid = ?').get(id) as { id: number } | undefined)?.id;
-  if (mode === 'new' && listId) throw new HttpError(409, 'This session was already imported. Use "Update list" to refresh it.');
+  if (mode === 'new' && listId) throw new HttpError(409, 'This session is already linked to a reading list. Use "Update list" to refresh it, or import a copy.');
   if (mode === 'update' && !listId) throw new HttpError(404, 'No list is linked to this session yet.');
+  const link = mode !== 'copy';
+  const nm = (found.display_name || 'Session').slice(0, 80);
   db.transaction(() => {
-    if (!listId) listId = Number(db.prepare('INSERT INTO lists (name, created_at, session_uuid) VALUES (?, ?, ?)').run(found.display_name.slice(0, 80) || 'Session', Date.now(), id).lastInsertRowid);
-    else db.prepare('DELETE FROM list_items WHERE list_id = ?').run(listId);
+    if (mode === 'copy' || !listId) listId = Number(db.prepare('INSERT INTO lists (name, created_at, session_uuid, session_rev) VALUES (?, ?, ?, ?)').run(mode === 'copy' ? `${nm} (copy)` : nm, Date.now(), link ? id : null, link ? found.rev ?? null : null).lastInsertRowid);
+    else {
+      db.prepare('DELETE FROM list_items WHERE list_id = ?').run(listId);
+      db.prepare('UPDATE lists SET session_rev = ? WHERE id = ?').run(found.rev ?? null, listId);
+    }
     const ins = db.prepare('INSERT INTO list_items (list_id, book_id, position) VALUES (?, ?, ?)');
     unique.forEach((b, i) => ins.run(listId!, b, i));
   })();
   res.json({ listId, imported: unique.length, unmatched });
+});
+
+// Open a reading list in a viewer. A list that isn't tied to a session yet gets a new one (and stays tied
+// to it). A tied list brings its session up to date first: books the list has that the session lacks are added,
+// and (when the session isn't open) books the session has that the list dropped are removed. Documents Shelf
+// doesn't know are never touched. The order is not forced onto the session.
+app.post('/api/lists/:id/session', async (req, res) => {
+  needSessions();
+  const lid = toInt(req.params.id);
+  const list = db.prepare('SELECT name, session_uuid FROM lists WHERE id = ?').get(lid) as { name: string; session_uuid: string | null } | undefined;
+  if (!list) throw new HttpError(404, 'list not found');
+  const ids = (db.prepare('SELECT li.book_id FROM list_items li JOIN books b ON b.id = li.book_id WHERE li.list_id = ? AND b.missing = 0 ORDER BY li.position').all(lid) as Array<{ book_id: number }>).map((r) => r.book_id);
+  const viewer = viewerArgs(req.body?.viewer);
+  const wantOpen = !!req.body?.open;
+  const found = list.session_uuid ? (await listSessions()).sessions.find((x: SessionOut) => x.uuid === list.session_uuid) : undefined;
+  if (list.session_uuid && !found) db.prepare('UPDATE lists SET session_uuid = NULL, session_rev = NULL WHERE id = ?').run(lid);
+
+  if (!found) {
+    const { paths, skipped } = pathsFor(ids);
+    if (!paths.length) throw new HttpError(400, 'None of the books in this list can be opened by a PDF viewer (it needs PDF, EPUB or CBZ files).');
+    const d = await ds(['create', `--name=${sessionName(list.name)}`, ...viewer, ...(wantOpen ? ['--open'] : []), ...paths], wantOpen ? 40_000 : 15_000);
+    const session = one(d);
+    db.prepare('UPDATE lists SET session_uuid = ?, session_rev = ? WHERE id = ?').run(session.uuid, session.rev ?? null, lid);
+    return res.json({ session, created: true, added: paths.length, removed: 0, skipped });
+  }
+
+  const wanted = new Set(ids);
+  const have = new Set<number>();
+  for (const m of [...found.files, ...found.pending, ...found.lost]) if (m.bookId !== null) have.add(m.bookId);
+  const addIds = ids.filter((b) => !have.has(b));
+  const drop = found.state === 'stopped' ? [...found.files, ...found.pending, ...found.lost].filter((m) => m.bookId !== null && !wanted.has(m.bookId)) : [];
+  let rev = found.rev;
+  let current: SessionOut = found;
+  let skipped = 0;
+  let added = 0;
+  if (addIds.length) {
+    const { paths, skipped: sk } = pathsFor(addIds);
+    skipped = sk;
+    if (paths.length) {
+      const d = await ds(['add', found.uuid, ...paths, `--expect-rev=${rev}`]);
+      current = one(d);
+      rev = current.rev;
+      added = paths.length;
+    }
+  }
+  if (drop.length) {
+    const d = await ds(['remove', found.uuid, ...drop.map((m) => m.path), `--expect-rev=${rev}`]);
+    current = one(d);
+    rev = current.rev;
+  }
+  let opened = false;
+  if (wantOpen) {
+    if (current.state === 'stopped') {
+      const d = await ds(['open', found.uuid, ...viewer], 35_000);
+      current = d.session ? one(d) : current;
+      opened = true;
+    } else if (req.body?.restart) {
+      const d = await ds(['restart', found.uuid, ...viewer], 45_000);
+      current = d.session ? one(d) : current;
+      opened = true;
+    }
+  }
+  db.prepare('UPDATE lists SET session_rev = ? WHERE id = ?').run(current.rev ?? null, lid);
+  res.json({ session: current, created: false, added, removed: drop.length, skipped, opened });
+});
+
+// What a drop, a paste or a link means: Shelf book links (#/read/12), file:// links, paths inside the library,
+// a folder (all its books), and file names of files dragged in from the desktop (matched by name and size).
+app.post('/api/resolve', (req, res) => {
+  const texts = (Array.isArray(req.body?.texts) ? req.body.texts : []).filter((t: unknown): t is string => typeof t === 'string').slice(0, 500);
+  const files = (Array.isArray(req.body?.files) ? req.body.files : []).filter((f: any) => f && typeof f.name === 'string').slice(0, 500) as Array<{ name: string; size?: number }>;
+  const ids = new Set<number>();
+  const unknown: string[] = [];
+  const byId = db.prepare('SELECT id FROM books WHERE id = ? AND missing = 0');
+  const byPath = db.prepare('SELECT id FROM books WHERE path = ? AND missing = 0');
+  const inDir = db.prepare("SELECT id FROM books WHERE missing = 0 AND (dir = ? OR dir LIKE ? ESCAPE '\\') ORDER BY path");
+  const byName = db.prepare('SELECT id, size FROM books WHERE missing = 0 AND lower(filename) = lower(?)');
+  for (let raw of texts) {
+    raw = raw.trim();
+    if (!raw) continue;
+    let hit = false;
+    const idm = /#\/read\/(\d+)|\/api\/books\/(\d+)(?:\/|$|\?)/.exec(raw);
+    if (idm && /^(https?:\/\/|\/|#)/.test(raw)) {
+      try {
+        const u = raw.startsWith('http') ? new URL(raw) : null;
+        if (u && req.headers.host && u.host !== req.headers.host) throw new Error('another server');
+      } catch {
+        unknown.push(raw);
+        continue;
+      }
+      const id = Number(idm[1] ?? idm[2]);
+      if (byId.get(id)) ids.add(id);
+      else unknown.push(raw);
+      continue;
+    }
+    let p = raw;
+    if (/^file:\/\//i.test(raw)) {
+      try { p = decodeURIComponent(new URL(raw).pathname); } catch { unknown.push(raw); continue; }
+    }
+    p = p.replace(/^["']|["']$/g, '');
+    let rel = path.isAbsolute(p) ? path.relative(LIBRARY_DIR, path.normalize(p)) : p.replace(/^\.\//, '');
+    if (HOST_LIBRARY && path.isAbsolute(p) && rel.startsWith('..')) rel = path.relative(HOST_LIBRARY, path.normalize(p));
+    rel = rel.split(path.sep).join('/').replace(/\/+$/, '');
+    if (rel && !rel.startsWith('..')) {
+      const b = byPath.get(rel) as { id: number } | undefined;
+      if (b) { ids.add(b.id); hit = true; }
+      else for (const r of inDir.all(rel, likeEsc(rel) + '/%') as Array<{ id: number }>) { ids.add(r.id); hit = true; }
+    }
+    if (!hit) unknown.push(raw);
+  }
+  for (const f of files) {
+    const rows = byName.all(f.name) as Array<{ id: number; size: number }>;
+    const exact = rows.filter((r) => r.size === f.size);
+    const pick = exact.length === 1 ? exact : rows.length === 1 ? rows : [];
+    if (pick.length) ids.add(pick[0].id);
+    else unknown.push(f.name);
+  }
+  res.json({ bookIds: [...ids], unknown });
 });
 
 // ---------- reading progress ----------
@@ -816,7 +950,7 @@ app.post('/api/bulk/tags', (req, res) => {
 // ---------- reading lists ----------
 
 const LIST_SQL = `
-  SELECT l.id, l.name, l.created_at AS createdAt, l.session_uuid AS sessionUuid,
+  SELECT l.id, l.name, l.created_at AS createdAt, l.session_uuid AS sessionUuid, l.session_rev AS sessionRev,
          (SELECT COUNT(*) FROM list_items li JOIN books b ON b.id = li.book_id
           WHERE li.list_id = l.id AND b.missing = 0) AS count
   FROM lists l`;
@@ -852,10 +986,47 @@ app.post('/api/lists/:id/items', (req, res) => {
     let pos = (db.prepare('SELECT COALESCE(MAX(position), -1) AS p FROM list_items WHERE list_id = ?').get(id) as { p: number }).p + 1;
     const ins = db.prepare('INSERT OR IGNORE INTO list_items (list_id, book_id, position) VALUES (?, ?, ?)');
     const exists = db.prepare('SELECT 1 FROM books WHERE id = ?');
+    const fresh: number[] = [];
     for (const b of bookIds) {
-      if (exists.get(b) && ins.run(id, b, pos).changes) pos++;
+      if (exists.get(b) && ins.run(id, b, pos).changes) {
+        pos++;
+        fresh.push(b);
+      }
+    }
+    // Dropped between two cards: put the new ones there instead of at the end.
+    if (Number.isInteger(req.body?.at) && fresh.length) {
+      const order = (db.prepare('SELECT book_id FROM list_items WHERE list_id = ? ORDER BY position').all(id) as Array<{ book_id: number }>).map((r) => r.book_id).filter((b) => !fresh.includes(b));
+      order.splice(Math.max(0, Math.min(order.length, req.body.at)), 0, ...fresh);
+      const upd = db.prepare('UPDATE list_items SET position = ? WHERE list_id = ? AND book_id = ?');
+      order.forEach((b, i) => upd.run(i, id, b));
     }
   })();
+  res.json(db.prepare(`${LIST_SQL} WHERE l.id = ?`).get(id));
+});
+
+app.post('/api/lists/:id/copy', (req, res) => {
+  const id = toInt(req.params.id);
+  const l = db.prepare('SELECT name FROM lists WHERE id = ?').get(id) as { name: string } | undefined;
+  if (!l) throw new HttpError(404, 'list not found');
+  const name = typeof req.body?.name === 'string' && req.body.name.trim() ? cleanName(req.body.name) : `${l.name} (copy)`.slice(0, 80);
+  let nid = 0;
+  db.transaction(() => {
+    nid = Number(db.prepare('INSERT INTO lists (name, created_at) VALUES (?, ?)').run(name, Date.now()).lastInsertRowid);
+    db.prepare('INSERT INTO list_items (list_id, book_id, position) SELECT ?, book_id, position FROM list_items WHERE list_id = ?').run(nid, id);
+  })();
+  res.json(db.prepare(`${LIST_SQL} WHERE l.id = ?`).get(nid));
+});
+
+app.post('/api/lists/:id/unlink', (req, res) => {
+  const id = toInt(req.params.id);
+  db.prepare('UPDATE lists SET session_uuid = NULL, session_rev = NULL WHERE id = ?').run(id);
+  res.json(db.prepare(`${LIST_SQL} WHERE l.id = ?`).get(id));
+});
+
+app.post('/api/lists/:id/items/remove', (req, res) => {
+  const id = toInt(req.params.id);
+  const del = db.prepare('DELETE FROM list_items WHERE list_id = ? AND book_id = ?');
+  db.transaction(() => intArray(req.body?.bookIds).forEach((b) => del.run(id, b)))();
   res.json(db.prepare(`${LIST_SQL} WHERE l.id = ?`).get(id));
 });
 
@@ -1236,7 +1407,9 @@ app.get('/api/info', async (_req, res) => {
     docker: IN_DOCKER,
     opener: IN_DOCKER ? !!OPENER_SOCKET && (await helperAlive(OPENER_SOCKET)) : true,
     readOnly: READONLY,
-    sessions: SESSIONS_CMD.length > 0,
+    sessions: sessionsOn(),
+    sessionsConfigured: SESSIONS_CMD.length > 0,
+    sessionsCommand: SESSIONS_CMD.join(' '),
     display: !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY),
     tools: await toolsAvailable(),
     missing: (db.prepare('SELECT COUNT(*) AS n FROM books WHERE missing = 1').get() as { n: number }).n,

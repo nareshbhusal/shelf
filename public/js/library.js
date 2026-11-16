@@ -3,7 +3,8 @@ import { chip, openBookInfo, openListPicker, openTagPicker } from './dialogs.js'
 import { openWithMenu, readerMenuItems } from './openwith.js';
 import { openRename } from './rename.js';
 import { renameFolder, trashBooks, trashFolder } from './trash.js';
-import { openSessionPicker } from './sessions.js';
+import { addToList, carryBooks, dragHasBooks, listAdder, readDrop } from './listadd.js';
+import { copyList, linkBar, openListInViewer, openSessionPicker, viewerItems, viewerName } from './sessions.js';
 import { bookName, onSettings, setSetting, settings, SORTS } from './settings.js';
 import { booksChanged, events, refreshMeta, store, subscribe, tagById } from './store.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
@@ -75,7 +76,12 @@ export function createLibraryView(route) {
   const filters = h('div', { class: 'filter-bar' });
   const selBar = h('div', { class: 'sel-bar hidden' });
   const content = h('div', { class: 'lib-content' });
-  root.append(head, filters, selBar, content);
+  const listTop = h('div', { class: 'list-top' });
+  const linkSlot = h('div', { class: 'link-slot' });
+  const curList = () => store.lists.find((l) => l.id === ctx.listId) ?? { id: ctx.listId, name: title, count: books.length };
+  const adder = isList ? listAdder({ getList: curList, has: (id) => books.some((b) => b.id === id), onAdded: () => load() }) : null;
+  if (isList) listTop.append(linkSlot, adder.el);
+  root.append(head, ...(isList ? [listTop] : []), filters, selBar, content);
 
   const sortKey = () => (isRecent ? 'read' : isAdded ? 'added' : isList ? listSort : settings.sort);
   // "Name" sorts by whatever name is displayed, so the order always matches what you see.
@@ -137,6 +143,11 @@ export function createLibraryView(route) {
     left.append(h('span', { class: 'muted count' }, loaded ? plural(count, 'book') : ''));
 
     const controls = h('div', { class: 'lib-controls' });
+    if (isList) {
+      const l = curList();
+      const sess = l.sessionUuid ? store.sessions?.sessions.find((x) => x.uuid === l.sessionUuid) : null;
+      linkSlot.replaceChildren(...[l.sessionUuid && store.info?.sessions ? linkBar({ list: l, session: sess, onDone: () => { renderHead(); load(); } }) : null].filter(Boolean));
+    }
 
     if (ctx.kind === 'files') {
       const rec = route.query.get('r') === '1';
@@ -198,6 +209,30 @@ export function createLibraryView(route) {
     if (isList) {
       controls.append(
         h('button', { class: 'btn small', title: 'Open every book in this list with one of your programs', onClick: (e) => openWithMenu(e.currentTarget, { listId: ctx.listId }, books.length) }, icon('external', 14), 'Open list with…'),
+      );
+      if (store.info?.sessions) {
+        const l = curList();
+        const sess = l.sessionUuid ? store.sessions?.sessions.find((x) => x.uuid === l.sessionUuid) : null;
+        const running = sess && sess.state !== 'stopped';
+        const dflt = store.sessions?.viewers?.find((v) => v.default && v.installed) ?? store.sessions?.viewers?.find((v) => v.installed);
+        const go = (viewer) => openListInViewer(l, viewer, { restart: running });
+        controls.append(
+          h(
+            'div',
+            { class: 'split' },
+            h('button', { class: 'btn small', disabled: !books.length, title: running ? 'Open in the viewer (it is already open: Restart applies the changes)' : 'Open every book of this list together in a PDF viewer (through docsessions)', onClick: () => go(undefined) }, icon('session', 14), running ? `Restart in ${viewerName(sess.viewer)}` : `Open in ${viewerName(sess?.viewer ?? dflt?.id)}`),
+            h('button', { class: 'btn small caret', disabled: !books.length, title: 'Choose the viewer', 'aria-label': 'Choose the viewer', onClick: (e) => popMenu(e.currentTarget, viewerItems({ current: sess?.viewer ?? dflt?.id, verb: running ? 'Restart in' : 'Open in', pick: go })) }, icon('chevron', 12)),
+          ),
+        );
+      }
+      controls.append(
+        h('button', {
+          class: 'icon-btn', title: 'This list: copy, send to a session', 'aria-label': 'List actions',
+          onClick: (e) => popMenu(e.currentTarget, [
+            { label: 'Copy this list', onClick: async () => { const r = await copyList(curList()); if (r) location.hash = hashFor('list', [String(r.id)]); } },
+            ...(store.info?.sessions ? [{ label: 'Send to a session…', onClick: () => openSessionPicker({ listId: ctx.listId, listName: curList().name }) }] : []),
+          ]),
+        }, icon('more', 18)),
       );
     }
     if (ctx.kind === 'files' && ctx.dir && canRename()) {
@@ -262,26 +297,21 @@ export function createLibraryView(route) {
       h('button', { class: 'btn small', onClick: (e) => openWithMenu(e.currentTarget, { bookIds: [...selected] }, selected.size) }, icon('external', 14), 'Open with…'),
       canRename() ? h('button', { class: 'btn small', onClick: () => openRename(picked(), { onDone: afterRename }) }, icon('edit', 14), 'Rename…') : null,
       canRename() ? h('button', { class: 'btn small danger', onClick: () => doTrashBooks(picked()) }, icon('trash', 14), 'Move to trash…') : null,
-      isList
-        ? h(
-            'button',
-            {
-              class: 'btn small',
-              onClick: async () => {
-                const ids = [...selected];
-                await Promise.all(ids.map((id) => api.del(`/lists/${ctx.listId}/items/${id}`)));
-                selected.clear();
-                await refreshMeta();
-                load();
-              },
-            },
-            'Remove from list',
-          )
-        : null,
+      isList ? h('button', { class: 'btn small', onClick: () => removeFromList([...selected]) }, icon('x', 14), 'Remove from list') : null,
       h('span', { class: 'spacer' }),
       h('button', { class: 'btn small', onClick: () => { books.forEach((b) => selected.add(b.id)); syncSelection(); } }, 'Select all'),
       h('button', { class: 'btn small', onClick: () => { selected.clear(); syncSelection(); } }, 'Clear'),
     );
+  }
+
+  async function removeFromList(ids) {
+    try {
+      await api.post(`/lists/${ctx.listId}/items/remove`, { bookIds: ids });
+      ids.forEach((id) => selected.delete(id));
+      await refreshMeta();
+      toast(`Removed ${plural(ids.length, 'book')} from the list (the files are untouched)`);
+      load();
+    } catch (e) { toast(e.message, 'error'); }
   }
 
   function syncSelection() {
@@ -377,6 +407,9 @@ export function createLibraryView(route) {
       },
       icon('check', 14),
     );
+    const unlist = isList
+      ? h('button', { class: 'unlist', title: 'Remove from this list', 'aria-label': 'Remove from this list', onClick: (e) => { e.preventDefault(); e.stopPropagation(); removeFromList([book.id]); } }, icon('x', 14))
+      : null;
     const more = h(
       'button',
       {
@@ -391,6 +424,7 @@ export function createLibraryView(route) {
             { label: 'Details', onClick: () => openBookInfo(book, { onChange: () => { replaceCard(book); } }) },
             { label: 'Tags…', onClick: () => openTagPicker([book], { onChange: afterEdit(() => [book]) }) },
             { label: 'Add to reading list…', onClick: () => openListPicker([book], { onChange: afterEdit(() => [book]) }) },
+            isList ? { label: 'Remove from this list', onClick: () => removeFromList([book.id]) } : null,
             canRename() && !book.isFolder ? { label: 'Rename…', onClick: () => openRename([book], { onDone: afterRename }) } : null,
             canRename() && book.group ? { label: 'Rename folder…', onClick: () => doRenameFolder(book.dir, book.group) } : null,
             ...(store.info?.sessions && !book.isFolder ? [{ label: 'Add to session…', onClick: () => openSessionPicker({ bookIds: [book.id] }) }] : []),
@@ -422,7 +456,7 @@ export function createLibraryView(route) {
           more.click();
         },
       },
-      h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), check, more, pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null),
+      h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), check, more, isList ? unlist : null, pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null),
       h(
         'div',
         { class: 'meta' },
@@ -432,6 +466,7 @@ export function createLibraryView(route) {
         tagChips(book),
       ),
     );
+    card.addEventListener('dragstart', (e) => carryBooks(e, selected.has(book.id) ? [...selected] : [book.id]));
     if (isList) wireDrag(card, book);
     return card;
   }
@@ -518,8 +553,8 @@ export function createLibraryView(route) {
   function wireDrag(card, book) {
     card.addEventListener('dragstart', (e) => {
       dragId = book.id;
-      e.dataTransfer.effectAllowed = 'move';
-      e.dataTransfer.setData('text/plain', String(book.id));
+      e.dataTransfer.effectAllowed = 'copyMove';
+      e.dataTransfer.setData('text/plain', `${location.origin}/#/read/${book.id}`);
       card.classList.add('dragging');
     });
     card.addEventListener('dragend', () => {
@@ -549,6 +584,34 @@ export function createLibraryView(route) {
       } catch (err) {
         toast(err.message, 'error');
       }
+    });
+  }
+
+  // Books dropped on the page (from another page or tab, a link, files from the desktop) join the list, at
+  // the card they were dropped on when the order is manual.
+  if (isList) {
+    const hot = (on) => root.classList.toggle('drop-hot', on);
+    root.addEventListener('dragover', (e) => {
+      if (dragId != null || !dragHasBooks(e.dataTransfer)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      hot(true);
+    });
+    root.addEventListener('dragleave', (e) => { if (!root.contains(e.relatedTarget)) hot(false); });
+    root.addEventListener('drop', async (e) => {
+      if (dragId != null) return;
+      e.preventDefault();
+      hot(false);
+      let at;
+      const cardEl = e.target.closest?.('.card.book');
+      if (cardEl && listSort === 'manual') {
+        const i = books.findIndex((b) => String(b.id) === cardEl.dataset.id);
+        const r = cardEl.getBoundingClientRect();
+        const after = settings.view === 'list' ? e.clientY > r.top + r.height / 2 : e.clientX > r.left + r.width / 2;
+        if (i >= 0) at = i + (after ? 1 : 0);
+      }
+      const r = await addToList(curList(), readDrop(e.dataTransfer), { at });
+      if (r) load();
     });
   }
 
@@ -646,7 +709,7 @@ export function createLibraryView(route) {
       );
     }
     const msg =
-      isList ? 'This reading list is empty. Select books anywhere and use “Add to list”.'
+      isList ? 'This reading list is empty. Search for books in the field above, drag books here, or select books anywhere and use “Add to list”.'
       : isRecent ? 'Nothing read yet. Books you open show up here.'
       : isAdded ? `Nothing new in the last ${settings.addedDays} days.`
       : ctx.kind === 'all' ? 'No books match.'
@@ -676,7 +739,10 @@ export function createLibraryView(route) {
     const tag = e.target?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (document.getElementById('modal-root').childElementCount) return;
-    if (e.key === 'Escape' && selected.size) {
+    if (isList && (e.key === 'Delete' || e.key === 'Backspace') && selected.size) {
+      e.preventDefault();
+      removeFromList([...selected]);
+    } else if (e.key === 'Escape' && selected.size) {
       selected.clear();
       syncSelection();
     } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && books.length) {

@@ -1,7 +1,8 @@
 import { createLibraryView } from './library.js';
 import { createReader } from './reader.js';
-import { createSessionView, openSessionPicker } from './sessions.js';
-import { applySettings, onSettings, openSettings, setSetting, settings, syncSettings } from './settings.js';
+import { addToList, dragHasBooks, readDrop } from './listadd.js';
+import { copyList, createSessionView, openListInViewer, openSessionPicker, unlinkList, viewerItems } from './sessions.js';
+import { applySettings, onSettings, openSettings, setSetting, settings, sidebarOrder, syncSettings } from './settings.js';
 import { appName, events, refreshInfo, refreshMeta, refreshSessions, runScan, store, subscribe, watchScan } from './store.js';
 import { api } from './api.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
@@ -120,6 +121,8 @@ function folderNode(dir, byParent, activeDir, depth) {
   return out;
 }
 
+const sessionOf = (uuid) => (uuid ? store.sessions?.sessions.find((x) => x.uuid === uuid) : undefined);
+
 function renderSidebar() {
   const activeDir = route.name === 'files' ? route.rest.join('/') : null;
   const activeTag = new Set((route.name === 'all' ? route.query.get('tags') ?? '' : '').split(',').filter(Boolean).map(Number));
@@ -157,41 +160,82 @@ function renderSidebar() {
     : [h('div', { class: 'nav-empty' }, 'No tags yet. Select books and press Tag.')];
 
   const listsEl = store.lists.length
-    ? store.lists.map((l) =>
-        h(
+    ? store.lists.map((l) => {
+        const row = h(
           'div',
           { class: 'nav-row tag-row' },
-          link(hashFor('list', [String(l.id)]), activeList === l.id, icon('list', 15), h('span', { class: 'grow ellipsis' }, l.name), h('span', { class: 'count' }, String(l.count))),
+          link(
+            hashFor('list', [String(l.id)]),
+            activeList === l.id,
+            icon('list', 15),
+            h('span', { class: 'grow ellipsis' }, l.name),
+            l.sessionUuid && store.info?.sessions ? h('span', { class: 'linked-ic', title: `Linked with session “${sessionOf(l.sessionUuid)?.display_name ?? 'session'}”` }, icon('link', 12)) : null,
+            h('span', { class: 'count' }, String(l.count)),
+          ),
           h('button', { class: 'row-more', title: 'List options', onClick: (e) => listMenu(e.currentTarget, l) }, icon('more', 14)),
-        ),
-      )
+        );
+        // Books dragged from anywhere can be dropped on a list.
+        row.addEventListener('dragover', (e) => {
+          if (!dragHasBooks(e.dataTransfer)) return;
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'copy';
+          row.classList.add('drop-hot');
+        });
+        row.addEventListener('dragleave', () => row.classList.remove('drop-hot'));
+        row.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          row.classList.remove('drop-hot');
+          await addToList(l, readDrop(e.dataTransfer));
+        });
+        return row;
+      })
     : [h('div', { class: 'nav-empty' }, 'No reading lists yet.')];
 
-  const sessionsEl = !store.info?.sessions
+  // Sessions (docsessions) hang under Reading lists as a foldable sub-section.
+  const sessionRows = !store.info?.sessions
     ? null
     : store.sessionsError
-      ? [h('div', { class: 'nav-empty', title: store.sessionsError }, 'Sessions unavailable: ' + store.sessionsError.slice(0, 80))]
+      ? [h('div', { class: 'nav-empty', title: store.sessionsError }, 'Unavailable: ' + store.sessionsError.slice(0, 80))]
       : !store.sessions
         ? [h('div', { class: 'nav-empty' }, 'Loading…')]
         : store.sessions.sessions.length
           ? store.sessions.sessions.map((s) =>
-              link(hashFor('session', [s.uuid]), route.name === 'session' && route.rest[0] === s.uuid, icon('session', 15), h('span', { class: 'grow ellipsis' }, s.display_name || s.name || 'Session'), s.state !== 'stopped' ? h('i', { class: 'dot live', title: 'Open in the viewer' }) : null, h('span', { class: 'count' }, String(s.total))),
+              link(
+                hashFor('session', [s.uuid]),
+                route.name === 'session' && route.rest[0] === s.uuid,
+                icon('session', 15),
+                h('span', { class: 'grow ellipsis' }, s.display_name || s.name || 'Session'),
+                s.listId ? h('span', { class: 'linked-ic', title: 'Linked with a reading list' }, icon('link', 12)) : null,
+                s.state !== 'stopped' ? h('i', { class: 'dot live', title: 'Open in the viewer' }) : null,
+                h('span', { class: 'count' }, String(s.total)),
+              ),
             )
           : [h('div', { class: 'nav-empty' }, 'No sessions yet.')];
+  const sessionsOpen = settings.sessionsOpen !== false;
+  const sessionsSub = sessionRows
+    ? h(
+        'div',
+        { class: 'nav-sub' },
+        h(
+          'div',
+          { class: 'nav-subhead' },
+          h('button', { class: 'twisty' + (sessionsOpen ? ' open' : ''), 'aria-label': sessionsOpen ? 'Collapse sessions' : 'Expand sessions', 'aria-expanded': String(sessionsOpen), onClick: () => setSetting('sessionsOpen', !sessionsOpen) }, icon('chevron', 12)),
+          h('button', { class: 'subtitle', onClick: () => setSetting('sessionsOpen', !sessionsOpen) }, 'Sessions', store.sessions ? h('span', { class: 'count' }, String(store.sessions.sessions.length)) : null),
+          h('button', { class: 'icon-btn tiny', title: 'Reload sessions', onClick: () => refreshSessions() }, icon('refresh', 13)),
+        ),
+        sessionsOpen ? h('div', { class: 'nav-subbody' }, ...sessionRows) : null,
+      )
+    : null;
 
   const rootDirect = store.tree.root.direct;
-  sidebar.replaceChildren(
-    h('a', { class: 'brand', href: '#/files' }, icon('library', 22), h('span', null, appName())),
-    h(
-      'nav',
-      null,
-      section('Browse', null,
+  const sectionEls = {
+    browse: section('Browse', null,
         link('#/all', route.name === 'all' && !route.query.get('tags') && !route.query.get('q') && route.query.get('untagged') !== '1', icon('library', 15), h('span', { class: 'grow' }, 'All books'), h('span', { class: 'count' }, String(store.tree.root.total))),
         link('#/recent', route.name === 'recent', icon('clock', 15), h('span', { class: 'grow' }, 'Recently read')),
         link('#/added', route.name === 'added', icon('plus', 15), h('span', { class: 'grow' }, 'Recently added')),
         link(hashFor('all', [], { untagged: 1 }), route.name === 'all' && route.query.get('untagged') === '1', icon('inbox', 15), h('span', { class: 'grow' }, 'Untagged')),
       ),
-      section('Folders',
+    folders: section('Folders',
         h('button', {
           class: 'icon-btn tiny' + (settings.treeSort === 'recent' ? ' on' : ''),
           title: settings.treeSort === 'recent' ? 'Folders: recently read first (click for A–Z)' : 'Folders: A–Z (click for recently read first)',
@@ -201,9 +245,17 @@ function renderSidebar() {
         link('#/files', route.name === 'files' && !activeDir, icon('folder', 15), h('span', { class: 'grow' }, 'Library root'), rootDirect ? h('span', { class: 'count' }, String(store.tree.root.total)) : null),
         ...(byParent.get('') ?? []).flatMap((d) => folderNode(d, byParent, activeDir, 0)),
       ),
-      section('Reading lists', h('button', { class: 'icon-btn tiny', title: 'New reading list', onClick: newList }, icon('plus', 14)), ...listsEl),
-      sessionsEl ? section('Sessions', h('button', { class: 'icon-btn tiny', title: 'Reload sessions', onClick: () => refreshSessions() }, icon('refresh', 14)), ...sessionsEl) : null,
-      section('Tags', h('button', { class: 'icon-btn tiny', title: 'New tag', onClick: newTag }, icon('plus', 14)), ...tagsEl),
+    lists: section('Reading lists', h('button', { class: 'icon-btn tiny', title: 'New reading list', onClick: newList }, icon('plus', 14)), ...listsEl, sessionsSub),
+    tags: section('Tags', h('button', { class: 'icon-btn tiny', title: 'New tag', onClick: newTag }, icon('plus', 14)), ...tagsEl),
+  };
+  const orderedSections = sidebarOrder().map((k) => sectionEls[k]);
+
+  sidebar.replaceChildren(
+    h('a', { class: 'brand', href: '#/files' }, icon('library', 22), h('span', null, appName())),
+    h(
+      'nav',
+      null,
+      ...orderedSections,
     ),
     h('div', { class: 'side-foot' },
       h('button', { class: 'nav-item', onClick: openSettings, title: 'Display, programs, storage, backup  (,)' }, icon('settings', 15), h('span', { class: 'grow' }, 'Settings')),
@@ -255,7 +307,16 @@ function tagMenu(anchor, t) {
 }
 function listMenu(anchor, l) {
   popMenu(anchor, [
-    ...(store.info?.sessions ? [{ label: 'Send to a session…', onClick: () => openSessionPicker({ listId: l.id, listName: l.name }) }, l.sessionUuid ? { label: 'Open its session', onClick: () => (location.hash = hashFor('session', [l.sessionUuid])) } : null, '-'].filter(Boolean) : []),
+    ...(store.info?.sessions
+      ? [
+          { label: 'Open in a viewer…', disabled: !l.count, onClick: () => popMenu(anchor, viewerItems({ current: sessionOf(l.sessionUuid)?.viewer, pick: (v) => openListInViewer(l, v, { restart: sessionOf(l.sessionUuid)?.state !== 'stopped' && !!sessionOf(l.sessionUuid) }) })) },
+          { label: 'Send to a session…', onClick: () => openSessionPicker({ listId: l.id, listName: l.name }) },
+          l.sessionUuid ? { label: 'Open its session', onClick: () => (location.hash = hashFor('session', [l.sessionUuid])) } : null,
+          l.sessionUuid ? { label: 'Unlink from its session', onClick: () => unlinkList(l) } : null,
+          '-',
+        ].filter((x) => x !== null)
+      : []),
+    { label: 'Copy list', onClick: () => copyList(l) },
     { label: 'Rename…', onClick: async () => {
       const name = await askText({ title: 'Rename reading list', value: l.name, okLabel: 'Rename' });
       if (!name || name === l.name) return;
@@ -334,7 +395,7 @@ async function onRoute() {
 }
 
 window.addEventListener('hashchange', onRoute);
-onSettings((k) => (k === 'treeSort' || k === '*') && renderSidebar());
+onSettings((k) => (k === 'treeSort' || k === 'sidebarOrder' || k === 'sessionsOpen' || k === '*') && renderSidebar());
 subscribe(() => {
   renderSidebar();
   renderScan();
