@@ -3,6 +3,7 @@ import { chip, openBookInfo, openListPicker, openTagPicker } from './dialogs.js'
 import { openWithMenu, readerMenuItems } from './openwith.js';
 import { openRename } from './rename.js';
 import { renameFolder, trashBooks, trashFolder } from './trash.js';
+import { openSessionPicker } from './sessions.js';
 import { bookName, onSettings, setSetting, settings, SORTS } from './settings.js';
 import { booksChanged, events, refreshMeta, store, subscribe, tagById } from './store.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
@@ -257,6 +258,7 @@ export function createLibraryView(route) {
       h('strong', null, `${n} selected`),
       h('button', { class: 'btn small', onClick: () => openTagPicker(picked(), { onChange: afterEdit(picked) }) }, icon('tag', 14), 'Tag'),
       h('button', { class: 'btn small', onClick: () => openListPicker(picked(), { onChange: afterEdit(picked) }) }, icon('list', 14), 'Add to list'),
+      store.info?.sessions ? h('button', { class: 'btn small', onClick: () => openSessionPicker({ bookIds: picked().map((b) => b.id) }) }, icon('session', 14), 'Add to session') : null,
       h('button', { class: 'btn small', onClick: (e) => openWithMenu(e.currentTarget, { bookIds: [...selected] }, selected.size) }, icon('external', 14), 'Open with…'),
       canRename() ? h('button', { class: 'btn small', onClick: () => openRename(picked(), { onDone: afterRename }) }, icon('edit', 14), 'Rename…') : null,
       canRename() ? h('button', { class: 'btn small danger', onClick: () => doTrashBooks(picked()) }, icon('trash', 14), 'Move to trash…') : null,
@@ -391,6 +393,7 @@ export function createLibraryView(route) {
             { label: 'Add to reading list…', onClick: () => openListPicker([book], { onChange: afterEdit(() => [book]) }) },
             canRename() && !book.isFolder ? { label: 'Rename…', onClick: () => openRename([book], { onDone: afterRename }) } : null,
             canRename() && book.group ? { label: 'Rename folder…', onClick: () => doRenameFolder(book.dir, book.group) } : null,
+            ...(store.info?.sessions && !book.isFolder ? [{ label: 'Add to session…', onClick: () => openSessionPicker({ bookIds: [book.id] }) }] : []),
             ...readerMenuItems({ bookIds: [book.id] }, 1),
             book.isFolder ? null : { label: 'Download', onClick: () => (location.href = fileUrl(book, true)) },
             canRename() ? { label: 'Move to trash…', danger: true, onClick: () => doTrashBooks([book]) } : null,

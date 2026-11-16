@@ -1,13 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
-import { DATA_DIR, HOST, HOST_LIBRARY, IN_DOCKER, LIBRARY_DIR, OPENER_SOCKET, PDFJS_DIR, PORT, READONLY, ROOT, SHELF_NAME } from './config.js';
+import { DATA_DIR, HOST, HOST_LIBRARY, IN_DOCKER, LIBRARY_DIR, OPENER_SOCKET, PDFJS_DIR, PORT, READONLY, ROOT, SESSIONS_CMD, SHELF_NAME } from './config.js';
 import { AUTH_ON, authGate } from './auth.js';
 import { ensureThumb } from './covers.js';
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
 import { moveToTrash } from './trash.js';
+import { ds, listSessions, one, pathsFor, SessionError, type SessionOut } from './sessions.js';
 import { EPUB_MIME, epubStructure, pagesFromChars } from './epub.js';
 import { pdfDetails, toolsAvailable } from './meta.js';
 import { applyRename, planRename, renameFolder, RenameError } from './rename.js';
@@ -596,6 +597,119 @@ app.post('/api/trash', async (req, res) => {
   res.json(await moveToTrash(rels));
 });
 
+// ---------- sessions (docsessions); everything goes through its command line, see sessions.ts ----------
+
+const needSessions = () => {
+  if (!SESSIONS_CMD.length) throw new HttpError(404, 'Sessions are not set up. Add "sessions" to the shelf file.');
+};
+const sessionId = (v: unknown) => {
+  const id = String(v ?? '');
+  if (!/^[0-9a-f-]{8,40}$/i.test(id)) throw new HttpError(400, 'bad session id');
+  return id;
+};
+const revArgs = (rev: unknown) => (Number.isInteger(rev) ? [`--expect-rev=${rev}`] : []);
+const absArgs = (v: unknown): string[] => {
+  const arr = Array.isArray(v) ? v : [];
+  if (!arr.length || arr.length > 5000 || arr.some((x) => typeof x !== 'string' || !path.isAbsolute(x))) throw new HttpError(400, 'file paths must be absolute');
+  return arr as string[];
+};
+const sessionName = (v: unknown) => {
+  const n = cleanName(v, 120);
+  if (n.startsWith('-')) throw new HttpError(400, 'A session name can not start with a dash.');
+  return n;
+};
+
+app.get('/api/sessions', async (_req, res) => {
+  if (!SESSIONS_CMD.length) return res.json({ enabled: false });
+  res.json({ enabled: true, ...(await listSessions()) });
+});
+
+// Create a session from books (in the order given) or from a reading list.
+app.post('/api/sessions', async (req, res) => {
+  needSessions();
+  let ids = intArray(req.body?.bookIds ?? []);
+  const listId = req.body?.listId;
+  let name = typeof req.body?.name === 'string' && req.body.name.trim() ? sessionName(req.body.name) : '';
+  if (listId !== undefined) {
+    const list = db.prepare('SELECT name FROM lists WHERE id = ?').get(toInt(listId)) as { name: string } | undefined;
+    if (!list) throw new HttpError(404, 'list not found');
+    ids = (db.prepare('SELECT book_id FROM list_items WHERE list_id = ? ORDER BY position').all(toInt(listId)) as Array<{ book_id: number }>).map((r) => r.book_id);
+    name ||= sessionName(list.name);
+  }
+  const { paths, skipped } = pathsFor(ids);
+  if (!paths.length) throw new HttpError(400, 'None of these books can be opened by a PDF viewer (it needs PDF, EPUB or CBZ files).');
+  const viewer = typeof req.body?.viewer === 'string' && /^[\w.-]+$/.test(req.body.viewer) ? [`--viewer=${req.body.viewer}`] : [];
+  const d = await ds(['create', ...(name ? [`--name=${name}`] : []), ...viewer, ...(req.body?.open ? ['--open'] : []), ...paths], req.body?.open ? 40_000 : 15_000);
+  const session = one(d);
+  if (listId !== undefined && !db.prepare('SELECT 1 FROM lists WHERE session_uuid = ?').get(session.uuid)) {
+    // A list sent over stays tied to its session (a list is tied to one session only).
+    db.prepare('UPDATE lists SET session_uuid = ? WHERE id = ? AND session_uuid IS NULL').run(session.uuid, toInt(listId));
+  }
+  res.json({ session, skipped });
+});
+
+app.post('/api/sessions/:uuid/files', async (req, res) => {
+  needSessions();
+  const { paths, skipped } = pathsFor(intArray(req.body?.bookIds ?? []));
+  if (!paths.length) throw new HttpError(400, 'None of these books can be opened by a PDF viewer (it needs PDF, EPUB or CBZ files).');
+  const d = await ds(['add', sessionId(req.params.uuid), ...paths, ...revArgs(req.body?.rev), ...(req.body?.noQueue ? ['--no-queue'] : [])]);
+  res.json({ session: one(d), changes: d.changes, skipped });
+});
+
+app.post('/api/sessions/:uuid/remove', async (req, res) => {
+  needSessions();
+  const d = await ds(['remove', sessionId(req.params.uuid), ...absArgs(req.body?.paths), ...revArgs(req.body?.rev)]);
+  res.json({ session: one(d), changes: d.changes });
+});
+
+app.post('/api/sessions/:uuid/move', async (req, res) => {
+  needSessions();
+  const pos = toInt(req.body?.position);
+  if (pos < 1) throw new HttpError(400, 'position starts at 1');
+  const file = absArgs([req.body?.path])[0];
+  const d = await ds(['move-file', sessionId(req.params.uuid), file, String(pos), ...revArgs(req.body?.rev)]);
+  res.json({ session: one(d), changes: d.changes });
+});
+
+const ACTION_TIMEOUT: Record<string, number> = { open: 35_000, restart: 45_000, close: 20_000, rename: 15_000, delete: 15_000 };
+app.post('/api/sessions/:uuid/:action', async (req, res, next) => {
+  const action = req.params.action;
+  if (action === 'import') return next();
+  if (!(action in ACTION_TIMEOUT)) throw new HttpError(404, 'unknown action');
+  needSessions();
+  const id = sessionId(req.params.uuid);
+  const args: string[] = [action, id];
+  if (action === 'rename') args.push(sessionName(req.body?.name));
+  if (action === 'delete') args.push('--yes');
+  if (action === 'close' && req.body?.force) args.push('--force');
+  if (action === 'rename' || action === 'delete') args.push(...revArgs(req.body?.rev));
+  const d = await ds(args, ACTION_TIMEOUT[action]);
+  if (action === 'delete') db.prepare('UPDATE lists SET session_uuid = NULL WHERE session_uuid = ?').run(id);
+  res.json(d.session ? { ...d, session: one(d) } : d);
+});
+
+// Make (or refresh) a Shelf reading list from a session: its documents in order, those Shelf knows.
+app.post('/api/sessions/:uuid/import', async (req, res) => {
+  needSessions();
+  const id = sessionId(req.params.uuid);
+  const found = (await listSessions()).sessions.find((s: SessionOut) => s.uuid === id);
+  if (!found) throw new HttpError(404, 'session not found');
+  const mode = req.body?.mode === 'update' ? 'update' : 'new';
+  const books = [...found.files, ...found.pending].map((m) => m.bookId).filter((b): b is number => b !== null);
+  const unique = [...new Set(books)];
+  const unmatched = found.total - found.lost.length - books.length;
+  let listId = (db.prepare('SELECT id FROM lists WHERE session_uuid = ?').get(id) as { id: number } | undefined)?.id;
+  if (mode === 'new' && listId) throw new HttpError(409, 'This session was already imported. Use "Update list" to refresh it.');
+  if (mode === 'update' && !listId) throw new HttpError(404, 'No list is linked to this session yet.');
+  db.transaction(() => {
+    if (!listId) listId = Number(db.prepare('INSERT INTO lists (name, created_at, session_uuid) VALUES (?, ?, ?)').run(found.display_name.slice(0, 80) || 'Session', Date.now(), id).lastInsertRowid);
+    else db.prepare('DELETE FROM list_items WHERE list_id = ?').run(listId);
+    const ins = db.prepare('INSERT INTO list_items (list_id, book_id, position) VALUES (?, ?, ?)');
+    unique.forEach((b, i) => ins.run(listId!, b, i));
+  })();
+  res.json({ listId, imported: unique.length, unmatched });
+});
+
 // ---------- reading progress ----------
 
 app.put('/api/books/:id/progress', async (req, res) => {
@@ -702,7 +816,7 @@ app.post('/api/bulk/tags', (req, res) => {
 // ---------- reading lists ----------
 
 const LIST_SQL = `
-  SELECT l.id, l.name, l.created_at AS createdAt,
+  SELECT l.id, l.name, l.created_at AS createdAt, l.session_uuid AS sessionUuid,
          (SELECT COUNT(*) FROM list_items li JOIN books b ON b.id = li.book_id
           WHERE li.list_id = l.id AND b.missing = 0) AS count
   FROM lists l`;
@@ -1122,6 +1236,7 @@ app.get('/api/info', async (_req, res) => {
     docker: IN_DOCKER,
     opener: IN_DOCKER ? !!OPENER_SOCKET && (await helperAlive(OPENER_SOCKET)) : true,
     readOnly: READONLY,
+    sessions: SESSIONS_CMD.length > 0,
     display: !!(process.env.DISPLAY || process.env.WAYLAND_DISPLAY),
     tools: await toolsAvailable(),
     missing: (db.prepare('SELECT COUNT(*) AS n FROM books WHERE missing = 1').get() as { n: number }).n,
@@ -1139,10 +1254,10 @@ app.use(express.static(path.join(ROOT, 'public')));
 app.use('/api', (_req, _res, next) => next(new HttpError(404, 'not found')));
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-  const status = err instanceof HttpError ? err.status : 500;
+  const status = err instanceof HttpError || err instanceof SessionError ? err.status : 500;
   if (status === 500) console.error(err);
   if (res.headersSent) return res.destroy();
-  res.status(status).json({ error: err instanceof Error ? err.message : 'server error' });
+  res.status(status).json({ error: err instanceof Error ? err.message : 'server error', ...(err instanceof SessionError ? { code: err.code, currentRev: err.currentRev } : {}) });
 });
 
 const server = app.listen(PORT, HOST, () => {

@@ -34,6 +34,16 @@ export interface ShelfSpec {
   requireMount: string[]; // absolute
   /** Folders the scan skips: a bare name (any folder with that name) or a library-relative path. See ignoreRules(). */
   ignore: string[];
+  /** The docsessions command (program and leading arguments), or empty when the sessions feature is off. */
+  sessions: string[];
+}
+
+/** Splits a command written as text into program and arguments: spaces separate, quotes group, `~/` is the home folder. */
+export function splitCommand(text: string): string[] {
+  const out: string[] = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  for (let m; (m = re.exec(text)); ) out.push(m[1] ?? m[2] ?? m[3]);
+  return out.map(expandHome);
 }
 
 export interface Report {
@@ -42,7 +52,7 @@ export interface Report {
   info: string[];
 }
 
-const KNOWN = new Set(['name', 'library', 'data', 'port', 'host', 'passkey', 'readonly', 'requireMount', 'ignore']);
+const KNOWN = new Set(['name', 'library', 'data', 'port', 'host', 'passkey', 'readonly', 'requireMount', 'ignore', 'sessions']);
 const BOOK_EXT = new Set(['.pdf', '.epub', '.cbz', '.zip']);
 
 const expandHome = (p: string) => (p === '~' ? os.homedir() : p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p);
@@ -138,6 +148,14 @@ export function readShelfFile(file: string): ShelfSpec {
     ignore = ignoreRules(resolveIn(dir, lib), arr as string[]);
   }
 
+  let sessions: string[] = [];
+  if (o.sessions !== undefined) {
+    const v = o.sessions;
+    const arr = typeof v === 'string' ? splitCommand(v) : v;
+    if (!Array.isArray(arr) || !arr.length || arr.some((x) => typeof x !== 'string' || !x)) throw new ShelfFileError(`${abs}: "sessions" must be the docsessions command, e.g. "docsessions" or ["bash", "~/tools/docsessions/start.sh"]`);
+    sessions = (arr as string[]).map(expandHome);
+  }
+
   return {
     file: abs,
     dir,
@@ -153,6 +171,7 @@ export function readShelfFile(file: string): ShelfSpec {
     readonly: o.readonly === true,
     requireMount: mounts,
     ignore,
+    sessions,
   };
 }
 
@@ -274,6 +293,12 @@ export function checkShelf(spec: ShelfSpec): Report {
   const r: Report = { errors: [], warnings: [], info: [] };
   const unknown = unknownKeys(spec.file);
   if (unknown.length) r.warnings.push(`Unknown key${unknown.length > 1 ? 's' : ''} in the shelf file (typo?): ${unknown.join(', ')}`);
+  if (spec.sessions.length) {
+    const prog = spec.sessions[0];
+    const onPath = prog.includes('/') ? fs.existsSync(prog) : (process.env.PATH ?? '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, prog)));
+    if (onPath) r.info.push(`Sessions: using ${spec.sessions.join(' ')}`);
+    else r.warnings.push(`sessions: ${prog} was not found (typo, or not on PATH?). The Sessions section will show an error until it is.`);
+  }
   if (spec.dataImplied) r.info.push(`No "data" in the shelf file: using ${spec.data} (next to the file).`);
 
   const open = spec.host && !/^(127\.|localhost$|\[?::1\]?$)/.test(spec.host);

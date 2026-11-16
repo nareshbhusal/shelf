@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { checkShelf, ignoreRules, printReport, readShelfFile, ShelfFileError, type ShelfSpec } from './shelffile.js';
+import { checkShelf, ignoreRules, printReport, readShelfFile, ShelfFileError, splitCommand, type ShelfSpec } from './shelffile.js';
 
 export type Format = 'pdf' | 'epub' | 'cbz';
 
@@ -39,6 +39,8 @@ export const IGNORE: string[] = (() => {
     process.exit(1);
   }
 })();
+/** The docsessions command; empty = the Sessions feature is off (shelf file "sessions", or SHELF_SESSIONS). */
+export const SESSIONS_CMD: string[] = spec ? spec.sessions : splitCommand(process.env.SHELF_SESSIONS ?? '');
 export const THUMB_DIR = path.join(DATA_DIR, 'thumbs');
 /** Scratch space. Everything Shelf writes outside the library goes under DATA_DIR, never the system /tmp. */
 export const TMP_DIR = path.join(DATA_DIR, 'tmp');

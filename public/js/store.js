@@ -8,6 +8,8 @@ export const store = {
   tree: { root: { direct: 0, total: 0 }, dirs: [] },
   info: null,
   scan: null,
+  sessions: null, // docsessions: {sessions, monitor, viewers}, once loaded (only when the shelf file sets "sessions")
+  sessionsError: '',
 };
 export const tagById = new Map();
 /** "Shelf", or "Shelf (name)" when the shelf file gives this instance a name. */
@@ -29,6 +31,18 @@ export async function refreshMeta() {
   Object.assign(store, { tags, lists, tree, readers });
   tagById.clear();
   for (const t of tags) tagById.set(t.id, t);
+  emit();
+}
+
+/** Sessions are read through an external program, so they are fetched when needed, not with every refresh. */
+export async function refreshSessions() {
+  if (!store.info?.sessions) return;
+  try {
+    store.sessions = await api.get('/sessions');
+    store.sessionsError = '';
+  } catch (e) {
+    store.sessionsError = e.message;
+  }
   emit();
 }
 

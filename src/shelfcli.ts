@@ -52,6 +52,7 @@ async function init(file: string, rest: string[]): Promise<number> {
     else if (k === '--passkey') o.passkey = v();
     else if (k === '--readonly') o.readonly = true;
     else if (k === '--ignore') ignore.push(v());
+    else if (k === '--sessions') o.sessions = v();
     else if (k === '--require-mount') mounts.push(resolveIn(process.cwd(), v()));
     else throw new ShelfFileError(`unknown option ${k}`);
   }
@@ -59,7 +60,7 @@ async function init(file: string, rest: string[]): Promise<number> {
   o.data ??= 'shelf-data';
   if (mounts.length) o.requireMount = mounts;
   if (ignore.length) o.ignore = ignore;
-  const ordered = Object.fromEntries(['name', 'library', 'data', 'port', 'host', 'passkey', 'readonly', 'requireMount', 'ignore'].filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
+  const ordered = Object.fromEntries(['name', 'library', 'data', 'port', 'host', 'passkey', 'readonly', 'requireMount', 'ignore', 'sessions'].filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
   fs.writeFileSync(abs, JSON.stringify(ordered, null, 2) + '\n', { flag: 'wx' });
   console.log(`Wrote ${abs}:\n${fs.readFileSync(abs, 'utf8')}`);
   return check(abs);

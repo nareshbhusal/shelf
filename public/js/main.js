@@ -1,7 +1,8 @@
 import { createLibraryView } from './library.js';
 import { createReader } from './reader.js';
+import { createSessionView, openSessionPicker } from './sessions.js';
 import { applySettings, onSettings, openSettings, setSetting, settings, syncSettings } from './settings.js';
-import { appName, events, refreshInfo, refreshMeta, runScan, store, subscribe, watchScan } from './store.js';
+import { appName, events, refreshInfo, refreshMeta, refreshSessions, runScan, store, subscribe, watchScan } from './store.js';
 import { api } from './api.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
 import { debounce, dirSegments, h, hashFor, icon, parseHash, plural, tagColor } from './util.js';
@@ -166,6 +167,18 @@ function renderSidebar() {
       )
     : [h('div', { class: 'nav-empty' }, 'No reading lists yet.')];
 
+  const sessionsEl = !store.info?.sessions
+    ? null
+    : store.sessionsError
+      ? [h('div', { class: 'nav-empty', title: store.sessionsError }, 'Sessions unavailable: ' + store.sessionsError.slice(0, 80))]
+      : !store.sessions
+        ? [h('div', { class: 'nav-empty' }, 'Loading…')]
+        : store.sessions.sessions.length
+          ? store.sessions.sessions.map((s) =>
+              link(hashFor('session', [s.uuid]), route.name === 'session' && route.rest[0] === s.uuid, icon('session', 15), h('span', { class: 'grow ellipsis' }, s.display_name || s.name || 'Session'), s.state !== 'stopped' ? h('i', { class: 'dot live', title: 'Open in the viewer' }) : null, h('span', { class: 'count' }, String(s.total))),
+            )
+          : [h('div', { class: 'nav-empty' }, 'No sessions yet.')];
+
   const rootDirect = store.tree.root.direct;
   sidebar.replaceChildren(
     h('a', { class: 'brand', href: '#/files' }, icon('library', 22), h('span', null, appName())),
@@ -189,6 +202,7 @@ function renderSidebar() {
         ...(byParent.get('') ?? []).flatMap((d) => folderNode(d, byParent, activeDir, 0)),
       ),
       section('Reading lists', h('button', { class: 'icon-btn tiny', title: 'New reading list', onClick: newList }, icon('plus', 14)), ...listsEl),
+      sessionsEl ? section('Sessions', h('button', { class: 'icon-btn tiny', title: 'Reload sessions', onClick: () => refreshSessions() }, icon('refresh', 14)), ...sessionsEl) : null,
       section('Tags', h('button', { class: 'icon-btn tiny', title: 'New tag', onClick: newTag }, icon('plus', 14)), ...tagsEl),
     ),
     h('div', { class: 'side-foot' },
@@ -241,6 +255,7 @@ function tagMenu(anchor, t) {
 }
 function listMenu(anchor, l) {
   popMenu(anchor, [
+    ...(store.info?.sessions ? [{ label: 'Send to a session…', onClick: () => openSessionPicker({ listId: l.id, listName: l.name }) }, l.sessionUuid ? { label: 'Open its session', onClick: () => (location.hash = hashFor('session', [l.sessionUuid])) } : null, '-'].filter(Boolean) : []),
     { label: 'Rename…', onClick: async () => {
       const name = await askText({ title: 'Rename reading list', value: l.name, okLabel: 'Rename' });
       if (!name || name === l.name) return;
@@ -284,7 +299,17 @@ async function onRoute() {
     setTimeout(() => refreshMeta().catch(() => {}), 700);
   }
 
-  if (route.name === 'read') {
+  if (route.name === 'session') {
+    const v = createSessionView(route);
+    await Promise.race([v.ready, sleep(150)]);
+    if (seq !== routeSeq) return v.destroy();
+    view = v;
+    main.replaceChildren(v.el);
+    main.scrollTop = 0;
+    document.title = `${v.title} — ${appName()}`;
+    v.ready.then(() => seq === routeSeq && (document.title = `${v.title} — ${appName()}`));
+    searchInput.value = '';
+  } else if (route.name === 'read') {
     document.title = appName(); // the reader sets the real title once it knows the book
     main.replaceChildren();
     const r = await createReader(route.rest[0], { page: Number(route.query.get('page')) || 0 });
@@ -334,6 +359,7 @@ function maybeRescan() {
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
     refreshMeta().catch(() => {});
+    refreshSessions();
     maybeRescan();
   }
 });
@@ -342,6 +368,7 @@ window.addEventListener('focus', maybeRescan);
 // ---------------------------------------------------------------- boot
 (async () => {
   await Promise.all([refreshMeta(), refreshInfo(), syncSettings()]).catch((e) => toast(e.message, 'error'));
+  refreshSessions();
   await onRoute();
   watchScan(); // picks up the scan the server starts on boot; refreshes everything when it ends
 })();

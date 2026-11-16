@@ -11,12 +11,14 @@ async function call(method, path, body) {
   }
   if (!res.ok) {
     let msg = res.statusText;
+    let body = {};
     try {
-      msg = (await res.json()).error || msg;
+      body = await res.json();
+      msg = body.error || msg;
     } catch {
       /* not JSON */
     }
-    throw new Error(msg);
+    throw Object.assign(new Error(msg), { status: res.status, code: body.code });
   }
   return res.json();
 }

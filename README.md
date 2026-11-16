@@ -75,7 +75,7 @@ small JSON file that sits inside the drive, and nothing else remembers it:
 ```json
 { "name": "private", "library": "books", "data": "shelf-data", "port": 4322, "readonly": false,
   "passkey": "a long phrase", "host": "0.0.0.0", "requireMount": ["/home/you/mounted_decrypted"],
-  "ignore": ["Samples"] }
+  "ignore": ["Samples"], "sessions": "~/docsessions/start.sh" }
 ```
 
 ```bash
@@ -133,6 +133,7 @@ frontend, `./shelf.sh native` is faster: edit, refresh the browser, no rebuild.
 | `HOST`            | `127.0.0.1`   | Bind address. `0.0.0.0` opens it to your network: set a pass key |
 | `SHELF_PASSKEY`   | none          | Require this pass key to open Shelf (see "Pass key")      |
 | `SHELF_READONLY`  | off           | `1`: never write into the library (no saving highlights, no renaming) |
+| `SHELF_SESSIONS`  | off           | Command that runs docsessions (see "Sessions")            |
 | `SHELF_ALLOWED_HOSTS` | none      | Extra host names allowed in the Host header (reverse proxies) |
 
 ## Pass key
@@ -361,10 +362,44 @@ its own sandboxed frame and loaded only when you get near it, so large books ope
 - Not there yet: highlights/notes in EPUBs, search inside a book, paged mode, fixed-layout books (shown as
   flowing text), DRM-protected books (can't be read at all).
 
+## Sessions (docsessions)
+
+Shelf can show, import and edit the sessions of the separate **docsessions** program (a set of documents
+that open together in a PDF viewer such as okular). It is optional and native-only: Docker can't reach a
+viewer on your desktop. Turn it on by telling Shelf how to run docsessions' command line:
+
+```bash
+SHELF_SESSIONS="/path/to/docsessions/start.sh" ./shelf.sh start
+./shelf.sh start --sessions "~/docsessions/start.sh"      # same thing, per run
+```
+
+In a shelf file it is the `"sessions"` key (a string, or an array like `["python3", "x.py"]`). Without it,
+none of this appears. If the program can't be found Shelf says so in the sidebar instead of failing.
+
+- **Shelf never reads or writes session files itself.** It only calls `docsessions <command> --json`
+  (list, create, add, remove, move-file, rename, delete, open, restart, close) and passes `--expect-rev`
+  on every edit, so a change made elsewhere in the meantime is reported as a conflict, not overwritten.
+- The sidebar gets a **Sessions** section; a session page lists its documents in order, with state
+  (not open / starting / open), **Open**, **Restart**, **Close**, move up/down, remove, rename, delete.
+- **Matching.** Session files are absolute paths; Shelf finds them in the library by exact path first,
+  then by the end of the path (folder + file name, then file name alone) when the library has moved or
+  lives on another mount. A document that matches nothing is shown by its path as "Not in this library"
+  and is left alone.
+- **Add to session** is in a book's menu and in the selection bar; you can also type a new session name.
+  Only PDF, EPUB and CBZ files can be sent. Loose-image comic folders are skipped and counted in the message.
+- **Reading lists.** "Import as reading list" makes a list from the session's matched books, in session
+  order, and links the two; "Update reading list" refreshes it (the import is one way: session → list).
+  A list's menu has "Send to a session…", which creates a new session from the list and links it.
+- **While a session is open** its documents follow the viewer: adding is allowed and goes into a queue that
+  applies on Restart; removing or moving an open document and deleting the session are refused (docsessions'
+  rule). Documents whose file doesn't exist yet are listed under "Waiting for the file".
+- Session edits are not library writes, so `--readonly` doesn't block them.
+- The session's own `index` (the page/document the viewer was on) is ignored; Shelf's reading progress is its own.
+
 ## Not built yet
 
 CBR/RAR, a paged mode for EPUB, reading series of PDFs or EPUBs straight through, smart lists,
-renaming folders, metadata editing, a file watcher, per-user accounts.
+metadata editing, a file watcher, per-user accounts.
 
 ## Layout
 
