@@ -301,6 +301,7 @@ export function createLibraryView(route) {
     if (!n) return;
     const picked = () => books.filter((b) => selected.has(b.id));
     selBar.replaceChildren(
+      ...[
       h('strong', null, `${n} selected`),
       h('button', { class: 'btn small', onClick: () => openTagPicker(picked(), { onChange: afterEdit(picked) }) }, icon('tag', 14), 'Tag'),
       h('button', { class: 'btn small', onClick: () => openListPicker(picked(), { onChange: afterEdit(picked) }) }, icon('list', 14), 'Add to list'),
@@ -312,6 +313,7 @@ export function createLibraryView(route) {
       h('span', { class: 'spacer' }),
       h('button', { class: 'btn small', onClick: () => { books.forEach((b) => selected.add(b.id)); syncSelection(); } }, 'Select all'),
       h('button', { class: 'btn small', onClick: () => { selected.clear(); syncSelection(); } }, 'Clear'),
+      ].filter(Boolean), // replaceChildren would print a null as the text "null"
     );
   }
 

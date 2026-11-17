@@ -162,3 +162,12 @@ export function progressText(b) {
   if (b.format === 'epub') return b.pages ? `page ~${epubPage(b)} of ~${b.pages} (${Math.floor(progressFraction(b) * 100)}%)${isFinished(b) ? ', finished' : ''}` : `${Math.floor(progressFraction(b) * 100)}%`;
   return b.pages ? `page ${p.page} of ${b.pages}${isFinished(b) ? ' (finished)' : ''}` : `page ${p.page}`;
 }
+
+// The DOM's own append/replaceChildren print a null as the text "null"; the views build their children with
+// `cond ? element : null`, so skip those the way h() does.
+for (const name of ['append', 'prepend', 'replaceChildren']) {
+  const native = Element.prototype[name];
+  Element.prototype[name] = function (...nodes) {
+    return native.apply(this, nodes.filter((n) => n != null && n !== false));
+  };
+}

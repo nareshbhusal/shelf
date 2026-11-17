@@ -44,14 +44,14 @@ function loginPage(error = '') {
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${title}</title>
 <style>
-:root{color-scheme:dark light;--bg:#14161b;--fg:#e8eaf0;--mut:#9aa1b2;--card:#1c1f27;--line:#2c303b;--acc:#6c8cff;--err:#ff7a7a}
-@media (prefers-color-scheme:light){:root{--bg:#f4f5f8;--fg:#1b1e26;--mut:#6a7183;--card:#fff;--line:#d9dce5;--err:#c62828}}
+:root{color-scheme:dark light;--bg:#152027;--fg:#e9e6dc;--mut:#8fa1a8;--card:#101a1f;--line:#26383f;--acc:#d2a65b;--err:#ff7a7a}
+@media (prefers-color-scheme:light){:root{--bg:#e5eaea;--fg:#15222a;--mut:#566a71;--card:#f2f5f4;--line:#cbd4d4;--err:#c62828}}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);font:16px system-ui,sans-serif}
-form{width:min(340px,calc(100vw - 32px));background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px;display:grid;gap:14px}
-h1{margin:0;font-size:20px}p{margin:0;color:var(--mut);font-size:14px}.err{color:var(--err)}
+form{width:min(340px,calc(100vw - 32px));background:var(--card);border:1px solid var(--line);border-radius:8px;padding:26px;display:grid;gap:14px}
+h1{margin:0;font:italic 650 26px Georgia,'Times New Roman',serif}p{margin:0;color:var(--mut);font-size:14px}.err{color:var(--err)}
 input{font:inherit;padding:10px 12px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg)}
 input:focus{outline:2px solid var(--acc);outline-offset:1px}
-button{font:inherit;padding:10px;border-radius:8px;border:0;background:var(--acc);color:#fff;font-weight:600;cursor:pointer}
+button{font:inherit;padding:10px;border-radius:8px;border:0;background:var(--acc);color:#1d1608;font-weight:600;cursor:pointer}
 </style></head><body>
 <form method="post" action="/login">
 <h1>${title}</h1>

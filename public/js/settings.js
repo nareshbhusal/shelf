@@ -59,7 +59,7 @@ const SCHEMA = [
     group: 'Appearance',
     items: [
       { key: 'theme', label: 'Theme', type: 'select', options: [['dark', 'Dark'], ['black', 'Black'], ['light', 'Light'], ['sepia', 'Sepia']], default: 'dark' },
-      { key: 'accent', label: 'Accent color', type: 'color', default: '#6c8cff' },
+      { key: 'accent', label: 'Accent color', type: 'color', default: '#d2a65b' },
       { key: 'uiScale', label: 'Interface size', type: 'range', min: 85, max: 130, step: 5, unit: '%', default: 100 },
       { key: 'sidebarWidth', label: 'Sidebar width', type: 'range', min: 200, max: 400, step: 10, unit: 'px', default: 270 },
       { key: 'sidebarOrder', label: 'Sidebar sections (top to bottom)', type: 'order', options: SIDEBAR_SECTIONS, default: SIDEBAR_SECTIONS.map(([k]) => k).join(','), stacked: true },

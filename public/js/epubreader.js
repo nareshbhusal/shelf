@@ -15,8 +15,12 @@ import { clearMarks, markMatches } from './search.js';
  * of that section), which is what the shell saves.
  */
 
-const SERIF = 'Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif';
-const SANS = 'system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+const SERIF = '"Literata", Georgia, "Iowan Old Style", "Palatino Linotype", "Times New Roman", serif';
+const SANS = '"Atkinson Hyperlegible Next", system-ui, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+// The bundled faces, declared inside each section (a frame doesn't inherit the page's fonts; the book's policy allows 'self').
+const FACES = `@font-face { font-family: "Literata"; src: url(/fonts/literata.woff2) format("woff2"); font-weight: 200 900; font-style: normal; }
+@font-face { font-family: "Literata"; src: url(/fonts/literata-italic.woff2) format("woff2"); font-weight: 200 900; font-style: italic; }
+@font-face { font-family: "Atkinson Hyperlegible Next"; src: url(/fonts/atkinson.woff2) format("woff2"); font-weight: 200 800; font-style: normal; }`;
 
 const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
 
@@ -103,14 +107,18 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
     const ds = document.documentElement.dataset;
     const paper = ds.readerBg === 'paper' || (ds.readerBg === 'theme' && (ds.theme === 'light' || ds.theme === 'sepia'));
     const fg = paper ? '#26231d' : '#d8dbe2';
-    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#6c8cff';
-    const link = paper ? '#2b57c9' : accent;
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#d2a65b';
+    const link = paper ? `color-mix(in srgb, ${accent} 50%, #000)` : accent;
     const fam = settings.epubFont === 'sans' ? SANS : settings.epubFont === 'serif' ? SERIF : '';
-    return `
+    return `${FACES}
 html { height: auto !important; min-height: 0 !important; overflow: hidden !important; background: transparent !important; color-scheme: ${paper ? 'light' : 'dark'}; }
 body { display: flow-root !important; box-sizing: border-box !important; width: auto !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 32px 28px 44px !important;
   background: transparent !important; color: ${fg} !important; font-size: ${settings.epubFontSize}px !important; line-height: ${settings.epubLine} !important; overflow-wrap: break-word; position: static !important; }
 body * { color: inherit !important; background-color: transparent !important; ${fam ? `font-family: ${fam} !important;` : ''} }
+${fam ? `body { font-kerning: normal; font-optical-sizing: auto; ${settings.epubFont === 'serif' ? 'font-feature-settings: "onum", "kern";' : ''} }
+body p { text-wrap: pretty; hyphens: manual; }
+body :is(h1, h2, h3, h4) { line-height: 1.22 !important; text-wrap: balance; font-weight: 600 !important; letter-spacing: -.005em; }
+` : ''}
 ${fam ? `pre, pre *, code, kbd, samp, tt { font-family: ui-monospace, Menlo, Consolas, monospace !important; }` : ''}
 a, a * { color: ${link} !important; }
 img, svg, video, canvas, table { max-width: 100% !important; }
@@ -232,15 +240,27 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
   const backBtn = h('button', { class: 'epub-back hidden', onClick: () => goBack() }, icon('back', 14), 'Back to where you were');
   let backTimer = 0;
   function pushBack() {
-    backStack.push(scroller.scrollTop);
+    backStack.push(here()); // a section and how far into it: pixel offsets drift when sections above settle to their real height
     backBtn.classList.remove('hidden');
     clearTimeout(backTimer);
     backTimer = setTimeout(() => { backStack.length = 0; backBtn.classList.add('hidden'); }, 25000);
   }
-  function goBack() {
-    const y = backStack.pop();
-    if (y !== undefined) scroller.scrollTop = y;
+  async function goBack() {
+    const at = backStack.pop();
     if (!backStack.length) backBtn.classList.add('hidden');
+    if (!at) return;
+    // Like a jump: land now, then put it right once the section is drawn and has its real height.
+    const mine = ++jumpSeq;
+    const stamp = userStamp;
+    pendingIdx = -1;
+    scrollToPos(at.i, at.pos);
+    await mount(secs[at.i]);
+    if (mine !== jumpSeq || dead) return;
+    scrollToPos(at.i, at.pos);
+    setTimeout(() => {
+      if (dead || mine !== jumpSeq || stamp !== userStamp) return;
+      scrollToPos(at.i, at.pos);
+    }, 350);
   }
 
   function openLink(sec, href) {

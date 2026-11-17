@@ -513,3 +513,15 @@ page you have open) are rejected, as are requests with an unexpected Host header
 "Open with" only ever runs commands you saved in Settings, never anything supplied by a request.
 Don't expose the port beyond a network you trust: the pass key is a gate, not a hardened login, and without
 HTTPS it travels in the clear.
+
+## Look
+
+Covers stand on a shelf and their titles sit on its lip (grid view); the accent is brass, and the Accent colour
+setting still changes it (text on it switches between dark and light by itself). Titles and headings are set in
+Literata, the interface in Atkinson Hyperlegible Next. Both fonts are bundled in `public/fonts` (SIL Open Font
+License, texts alongside), so nothing is loaded from outside, which matters for an encrypted instance.
+
+In the reader the top bar follows the theme and groups its tools; the page sits on a slightly darker "desk"
+(Settings > Reader background still overrides it). Two pages side by side are drawn as an open book: a shadow in
+the gutter and the edge of the page block on the outside. EPUBs are set in Literata (or Atkinson Hyperlegible
+Next with the Sans option); "The book's own" leaves the book's fonts alone.
