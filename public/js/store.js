@@ -46,6 +46,40 @@ export async function refreshSessions() {
   emit();
 }
 
+/**
+ * Keeps the sessions' state (open or not) current without a reload. docsessions is a separate program that
+ * runs a command each time, so the pace is modest: every 4 s while a page that shows a session is open
+ * (2 s while one is starting), every 15 s otherwise, and not at all while the tab is hidden. Only a real
+ * change redraws anything.
+ */
+export function startSessionPolling(wantFast) {
+  let last = Date.now();
+  let running = false;
+  // A one-second heartbeat decides whether it is time, so moving to a session page speeds the pace up at once.
+  const tick = async () => {
+    const starting = store.sessions?.sessions?.some((x) => x.state === 'starting');
+    const every = starting ? 2000 : wantFast() ? 4000 : 15000;
+    if (!running && Date.now() - last >= every && store.info?.sessions && !document.hidden) {
+      running = true;
+      try {
+        const d = await api.get('/sessions');
+        const changed = JSON.stringify(d) !== JSON.stringify(store.sessions) || store.sessionsError;
+        store.sessions = d;
+        store.sessionsError = '';
+        if (changed) emit();
+      } catch (e) {
+        if (e.message !== store.sessionsError) {
+          store.sessionsError = e.message;
+          emit();
+        }
+      }
+      last = Date.now();
+      running = false;
+    }
+  };
+  setInterval(tick, 1000);
+}
+
 export async function refreshInfo() {
   store.info = await api.get('/info');
   emit();

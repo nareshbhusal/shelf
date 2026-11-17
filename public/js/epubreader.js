@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { onSettings, setSetting, settings } from './settings.js';
 import { toast } from './ui.js';
 import { clamp, h, icon } from './util.js';
+import { clearMarks, markMatches } from './search.js';
 
 /**
  * EPUB reading, as a continuous vertical scroll like the PDF and comic readers.
@@ -28,7 +29,7 @@ function resolveHref(from, href) {
   return { path: dec(u.pathname.slice(1)), frag: dec(u.hash.slice(1)) };
 }
 
-export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, report, onKey, onClick }) {
+export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, report, onKey, onClick, onFind }) {
   let meta;
   try {
     meta = await api.get(`/books/${book.id}/epub`);
@@ -116,6 +117,8 @@ img, svg, video, canvas, table { max-width: 100% !important; }
 img, video { height: auto !important; }
 pre { white-space: pre-wrap !important; }
 ::selection { background: ${accent}66; }
+html body mark.srch { background-color: rgba(255, 214, 64, .55) !important; color: inherit !important; border-radius: 2px; }
+html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; outline: 2px solid rgba(255, 140, 0, .9); }
 `;
   }
   const styleDoc = (doc) => {
@@ -181,6 +184,7 @@ pre { white-space: pre-wrap !important; }
       return;
     }
     styleDoc(doc);
+    markSec(sec);
     doc.addEventListener('click', (e) => frameClick(sec, e));
     doc.addEventListener('keydown', frameKey);
     doc.addEventListener('load', () => measure(sec), true); // images finishing
@@ -198,6 +202,10 @@ pre { white-space: pre-wrap !important; }
 
   // ---------------------------------------------------------------- events from inside the frames
   function frameKey(e) {
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'f' && onFind) {
+      e.preventDefault(); // the browser's find only sees the sections that happen to be loaded
+      return onFind();
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const page = scroller.clientHeight * 0.9;
     const by = (top) => { e.preventDefault(); scroller.scrollBy({ top }); };
@@ -415,7 +423,66 @@ pre { white-space: pre-wrap !important; }
   });
 
   // ---------------------------------------------------------------- interface for the shell
+  // ---------------------------------------------------------------- search
+  let sx = null; // { regex, cur: {unit, ord} | null } while a search is shown
+  const texts = new Map();
+  /** Mark the hits in a loaded section; returns the current hit's mark, if it is in this section. */
+  function markSec(sec) {
+    const body = sec.frame?.contentDocument?.body;
+    if (!body) return null;
+    if (!sx?.regex) {
+      clearMarks(body);
+      return null;
+    }
+    return markMatches(body, sx.regex, sx.cur && sx.cur.unit === sec.i ? sx.cur.ord : -1);
+  }
+  const searchSource = {
+    count: N,
+    label: (i) => `Section ${i + 1}`,
+    /** The text of the section's body, the same text the marks are found in. */
+    async text(i) {
+      if (!texts.has(i)) {
+        const it = secs[i].it;
+        let t = '';
+        if (it.kind !== 'image') {
+          const r = await fetch(fileUrl(it.path, '&html=1'));
+          if (r.ok) t = new DOMParser().parseFromString(await r.text(), 'text/html').body?.textContent ?? '';
+        }
+        texts.set(i, t);
+      }
+      return texts.get(i);
+    },
+    setMarks(regex, cur) {
+      sx = regex ? { regex, cur } : null;
+      for (const sec of secs) if (sec.frame) markSec(sec);
+    },
+    /** Go to a hit: load its section, then put the marked text a third of the way down. */
+    async show({ unit, ord }) {
+      restoring = false;
+      if (!backStack.length) pushBack(); // one way back, however many hits you step through
+      const mine = ++jumpSeq;
+      const stamp = userStamp;
+      pendingIdx = unit;
+      layout();
+      scroller.scrollTop = tops[unit];
+      await mount(secs[unit]);
+      if (mine !== jumpSeq || dead) return;
+      const settle = () => {
+        const mk = markSec(secs[unit]);
+        layout();
+        scroller.scrollTop = Math.max(0, tops[unit] + (mk ? mk.getBoundingClientRect().top - scroller.clientHeight * 0.3 : 0));
+      };
+      settle();
+      setTimeout(() => {
+        if (dead || mine !== jumpSeq || stamp !== userStamp) return;
+        pendingIdx = -1;
+        settle();
+      }, 350);
+    },
+  };
+
   const impl = {
+    searchSource,
     setWidth(px) {
       colW = px;
       reflow(() => pagesEl.style.setProperty('--page-w', `${px}px`));
@@ -423,6 +490,25 @@ pre { white-space: pre-wrap !important; }
     goTo(n) {
       restoring = false;
       jumpTo(n - 1, '', false);
+    },
+    /** Jump to a spot in a section (from "go to page"); the Back button returns to where you were. */
+    async goToPos(n, pos) {
+      restoring = false;
+      const i = clamp(n - 1, 0, N - 1);
+      pushBack();
+      const mine = ++jumpSeq;
+      const stamp = userStamp;
+      pendingIdx = i;
+      layout();
+      scroller.scrollTop = tops[i];
+      await mount(secs[i]);
+      if (mine !== jumpSeq || dead) return;
+      scrollToPos(i, clamp(pos ?? 0, 0, 1));
+      setTimeout(() => {
+        if (dead || mine !== jumpSeq || stamp !== userStamp) return;
+        pendingIdx = -1;
+        scrollToPos(i, clamp(pos ?? 0, 0, 1));
+      }, 350);
     },
     /** Resume at a saved position. */
     async restore(page, pos) {

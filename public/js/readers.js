@@ -6,18 +6,24 @@ import { h, icon } from './util.js';
 const PRESETS = {
   books: [
     ['Okular', 'okular {file}'],
-    ['Evince', 'evince {file}'],
-    ['Zathura', 'zathura {file}'],
+    ['Okular (at page)', 'okular --page {page} {file}'],
+    ['qpdfview', 'qpdfview {file}'],
+    ['qpdfview (at page)', 'qpdfview {file}#{page}'],
+    ['Zathura (at page)', 'zathura -P {page} {file}'],
+    ['Evince (at page)', 'evince --page-index={page} {file}'],
     ['System default', 'xdg-open {file}'],
   ],
   lists: [
     ['Okular (tabs)', 'okular {files}'],
+    ['Okular (tabs, each at its page)', 'okular {files:{file}#page={page}}'],
+    ['qpdfview (tabs)', 'qpdfview {files}'],
+    ['qpdfview (tabs, each at its page)', 'qpdfview {files:{file}#{page}}'],
     ['Zathura', 'zathura {files}'],
     ['Evince', 'evince {files}'],
   ],
 };
 const SECTIONS = [
-  ['books', 'For books', 'Used by "Open with" on one or several selected books. {file} is the book.'],
+  ['books', 'For books', 'Used by "Open with" on one or several selected books, and the reader’s button. {file} is the book, {page} where to open it.'],
   ['lists', 'For reading lists', 'Used by "Open list with…". {files} passes every book of the list, in order.'],
 ];
 
@@ -100,7 +106,12 @@ export function openReadersManager(focusScope = 'books') {
         h('code', null, '{file}'), ' the book  ·  ',
         h('code', null, '{files}'), ' every selected book, or a whole reading list, one argument each  ·  ',
         h('code', null, '{dir}'), ' its folder  ·  ',
-        h('code', null, '{name}'), ' its file name. With none of these the file is added at the end. Quotes work. Pipes and ',
+        h('code', null, '{name}'), ' its file name  ·  ',
+        h('code', null, '{page}'), ' the page to open at: where the library says you stopped (1 if you haven’t started); from the reader’s button, the page you are on; counted from 1. For an EPUB it is an estimate, since the program may paginate differently  ·  ',
+        h('code', null, '{page0}'), ' the same counted from 0  ·  ',
+        h('code', null, '{files:TEXT}'), ' one argument per book with TEXT filled in for each, so each opens at its own page, e.g. ',
+        h('code', null, 'qpdfview {files:{file}#{page}}'),
+        '. With none of these the file is added at the end. Quotes work. Pipes and ',
         h('code', null, '&&'), " don't: put those in your own script and use that as the command.",
       ),
       h('div', { class: 'btn-row' }, h('button', { class: 'btn primary', onClick: save }, 'Save'), h('button', { class: 'btn', onClick: () => formEl.classList.add('hidden') }, 'Cancel')),

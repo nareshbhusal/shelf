@@ -2,6 +2,7 @@ import { api } from './api.js';
 import { copyText, toastCopied } from './annotations.js';
 import { bookName } from './settings.js';
 import { modal, toast } from './ui.js';
+import { identityHelp } from './missing.js';
 import { fmtBytes, h, hashFor, dirSegments, icon, progressText } from './util.js';
 
 const when = (ms) => (ms ? new Date(ms).toLocaleString() : '—');
@@ -51,6 +52,7 @@ export async function openFileInfo(book, ann) {
     add('Highlights, notes, drawings', `${a.count} in the file${a.canWrite ? '' : ` (can't be saved here: ${a.reason ?? 'read-only'})`}`);
   }
   add('Fingerprint', info.fingerprint, { mono: true });
+  if (info.fileId) add('PDF ID', info.fileId, { mono: true });
 
   const body = [];
   if (!info.exists) body.push(h('div', { class: 'info-warn' }, 'This file is missing from the library folder right now.'));
@@ -58,6 +60,9 @@ export async function openFileInfo(book, ann) {
   if (info.pdf?.length) {
     body.push(h('h3', { class: 'info-sub' }, 'PDF details'), h('dl', { class: 'info-grid' }, info.pdf.flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)])));
   }
-  body.push(h('p', { class: 'muted small' }, 'Fingerprint: file size plus a hash of three samples of its content. It is how Shelf keeps tags, lists and progress attached when you move or rename a file.'));
+  body.push(
+    h('p', { class: 'muted small' }, 'The fingerprint above is computed by Shelf from the file (size plus three samples of its content) and stored in Shelf’s own database, never in the file. It keeps tags, lists and progress attached when the file is moved or renamed with its content unchanged; it changes with any edit, so a file that was moved and edited together shows up as missing, and you can merge it there.'),
+    identityHelp(),
+  );
   const m = modal({ title: 'File info', body, wide: true, footer: [h('button', { class: 'btn primary', onClick: () => m.close() }, 'Close')] });
 }

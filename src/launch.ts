@@ -46,45 +46,63 @@ export function splitCommand(input: string): string[] {
 
 export interface CommandInfo {
   tokens: string[];
-  takesMany: boolean; // contains {files}
+  takesMany: boolean; // contains {files} or {files:...}
 }
+
+const SINGLE = /\{(file|dir|name|page|page0)\}/;
+const EACH = /^\{files:(.+)\}$/s; // one argument per book, built from the text after "files:"
 
 /** Validates a command template. Throws a readable Error. */
 export function parseTemplate(template: string): CommandInfo {
   const tokens = splitCommand(template);
   if (!tokens.length) throw new Error('the command is empty');
-  if (/\{(file|files|dir|name)\}/.test(tokens[0])) throw new Error('the program itself cannot be {file}; put the program name first');
-  if (tokens.some((t) => t.includes('{files}') && t !== '{files}')) throw new Error('{files} must stand alone as its own argument');
-  return { tokens, takesMany: tokens.includes('{files}') };
+  if (/\{(file|files|dir|name|page|page0)[}:]/.test(tokens[0])) throw new Error('the program itself cannot be {file}; put the program name first');
+  for (const t of tokens) {
+    if (t.includes('{files') && t !== '{files}' && !EACH.test(t)) throw new Error('{files} must stand alone as its own argument, or be written {files:TEXT} (for example {files:{file}#{page}})');
+    const m = EACH.exec(t);
+    if (m && !/\{(file|name|dir)\}/.test(m[1])) throw new Error('{files:TEXT} needs {file} (or {name}, {dir}) inside TEXT, e.g. {files:{file}#{page}}');
+  }
+  return { tokens, takesMany: tokens.some((t) => t === '{files}' || EACH.test(t)) };
 }
 
 /**
  * {file}  the first book's path      {dir}  its folder      {name}  its file name
+ * {page}  the page to open at (1-based: where you stopped reading, or 1)      {page0}  the same, counting from 0
  * {files} every book's path, one argument each (reading lists / multi-select)
+ * {files:TEXT}  one argument per book, TEXT filled in for each (so {files:{file}#{page}} gives each book its own page)
  * If the command mentions none of them, the file path is appended as the last argument.
  */
-export function buildArgv(template: string, files: string[], opts: { expandHome?: boolean } = {}): string[] {
+export function buildArgv(template: string, files: string[], opts: { expandHome?: boolean; pages?: number[] } = {}): string[] {
   const { tokens, takesMany } = parseTemplate(template);
   if (!files.length) throw new Error('no files to open');
   if (files.length > 1 && !takesMany) {
     throw new Error('this command takes one file at a time. Add {files} to it to open several (e.g. for a reading list).');
   }
-  const mentions = tokens.some((t) => /\{(file|files|dir|name)\}/.test(t));
+  const mentions = tokens.some((t) => SINGLE.test(t) || t === '{files}' || EACH.test(t));
   const all = mentions ? tokens : [...tokens, '{file}'];
-  const first = files[0];
   const home = os.homedir();
+  const pageOf = (i: number) => Math.max(1, Math.floor(opts.pages?.[i] ?? 1) || 1);
+  const fill = (t: string, i: number) =>
+    t
+      .replaceAll('{file}', files[i])
+      .replaceAll('{dir}', path.dirname(files[i]))
+      .replaceAll('{name}', path.basename(files[i]))
+      .replaceAll('{page0}', String(pageOf(i) - 1))
+      .replaceAll('{page}', String(pageOf(i)));
   const argv: string[] = [];
   for (const t of all) {
     if (t === '{files}') {
       argv.push(...files);
       continue;
     }
-    let s = t
-      .replaceAll('{file}', first)
-      .replaceAll('{dir}', path.dirname(first))
-      .replaceAll('{name}', path.basename(first));
-    if (opts.expandHome !== false && (s === '~' || s.startsWith('~/'))) s = home + s.slice(1);
-    argv.push(s);
+    const each = EACH.exec(t);
+    if (each) {
+      files.forEach((_, i) => argv.push(fill(each[1], i)));
+      continue;
+    }
+    let out = fill(t, 0);
+    if (opts.expandHome !== false && (out === '~' || out.startsWith('~/'))) out = home + out.slice(1);
+    argv.push(out);
   }
   return argv;
 }

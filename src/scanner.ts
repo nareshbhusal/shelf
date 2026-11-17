@@ -5,7 +5,7 @@ import { EXT_FORMAT, IGNORE, LIBRARY_DIR, type Format } from './config.js';
 import { db, type BookRow } from './db.js';
 import { cbzInfo, epubInfo, pdfMeta, type Meta } from './meta.js';
 import { checkpoint, gcThumbs } from './hygiene.js';
-import { fingerprint, mapPool, titleFromFilename } from './util.js';
+import { fingerprint, mapPool, pdfFileId, titleFromFilename } from './util.js';
 import { imageExt } from './zip.js';
 import crypto from 'node:crypto';
 
@@ -143,6 +143,9 @@ async function identify(f: Found): Promise<string> {
   return h.digest('hex');
 }
 
+/** A PDF's own document ID (see pdfFileId); '' for everything else. Only ever used to suggest matches. */
+const fileIdOf = (f: Found) => (f.format === 'pdf' && !f.images ? pdfFileId(f.abs, f.size) : Promise.resolve(''));
+
 /** Returns null when the file shouldn't be indexed (e.g. a .zip with no images, or an unreadable archive). */
 async function extract(f: Found): Promise<Meta | null> {
   if (f.images) return { pages: f.images.length };
@@ -163,19 +166,20 @@ async function extract(f: Found): Promise<Meta | null> {
 
 const insertBook = db.prepare(`
   INSERT INTO books (path, dir, filename, format, size, mtime_ms, fingerprint, meta_title, title,
-                     author, series, number, pages, added_at, missing, is_folder)
+                     author, series, number, pages, added_at, missing, is_folder, file_id)
   VALUES (@path, @dir, @filename, @format, @size, @mtime_ms, @fingerprint, @meta_title, @title,
-          @author, @series, @number, @pages, @added_at, 0, @is_folder)`);
+          @author, @series, @number, @pages, @added_at, 0, @is_folder, @file_id)`);
 const moveBook = db.prepare(
   `UPDATE books SET path=@path, dir=@dir, filename=@filename, mtime_ms=@mtime_ms, title=@title, missing=0 WHERE id=@id`,
 );
 const updateBook = db.prepare(`
   UPDATE books SET size=@size, mtime_ms=@mtime_ms, fingerprint=@fingerprint, meta_title=@meta_title,
          title=@title, author=@author, series=@series, number=@number, pages=@pages, is_folder=@is_folder, missing=0,
-         progress_frac=COALESCE(progress_frac, @frac)
+         file_id=COALESCE(NULLIF(@file_id, ''), file_id, ''), progress_frac=COALESCE(progress_frac, @frac)
   WHERE id=@id`);
-const setMissing = db.prepare(`UPDATE books SET missing=1 WHERE id=?`);
-const clearMissing = db.prepare(`UPDATE books SET missing=0 WHERE id=?`);
+const setFileId = db.prepare(`UPDATE books SET file_id=? WHERE id=?`);
+const setMissing = db.prepare(`UPDATE books SET missing=1, missing_at=? WHERE id=?`);
+const clearMissing = db.prepare(`UPDATE books SET missing=0, missing_at=NULL WHERE id=?`);
 
 /** An EPUB read before page estimates existed has (section, spot in section); express that as a fraction of the book. */
 function savedFraction(row: BookRow, chars?: number[]): number | null {
@@ -189,7 +193,7 @@ function savedFraction(row: BookRow, chars?: number[]): number | null {
 /** A folder's name has no extension to strip ("Vol 1.5" is not a ".5" file). */
 const nameTitle = (filename: string, folder: boolean) => (folder ? filename.normalize('NFC') : titleFromFilename(filename));
 
-function bookFields(f: Found, fp: string, meta: Meta) {
+function bookFields(f: Found, fp: string, meta: Meta, fileId = '') {
   const filename = path.posix.basename(f.rel);
   return {
     path: f.rel,
@@ -206,6 +210,7 @@ function bookFields(f: Found, fp: string, meta: Meta) {
     number: meta.number ?? null,
     pages: meta.pages ?? null,
     is_folder: f.images ? 1 : 0,
+    file_id: fileId,
   };
 }
 
@@ -321,7 +326,7 @@ async function runScan(full: boolean): Promise<void> {
 
   await mapPool(brandNew, 4, async ({ f, fp }) => {
     const meta = await extract(f);
-    if (meta) inserts.push(bookFields(f, fp, meta));
+    if (meta) inserts.push(bookFields(f, fp, meta, await fileIdOf(f)));
     else scanState.skipped++;
     scanState.processed++;
   });
@@ -329,7 +334,7 @@ async function runScan(full: boolean): Promise<void> {
     try {
       const fp = await identify(f);
       const meta = await extract(f);
-      if (meta) updates.push({ ...bookFields(f, fp, meta), id: row.id, frac: savedFraction(row, meta.epubChars) });
+      if (meta) updates.push({ ...bookFields(f, fp, meta, await fileIdOf(f)), id: row.id, frac: savedFraction(row, meta.epubChars) });
       else scanState.skipped++;
     } catch {
       scanState.errors++;
@@ -357,19 +362,60 @@ async function runScan(full: boolean): Promise<void> {
     for (const b of inserts) insertBook.run({ ...b, added_at: now });
     for (const r of gone) {
       if (!claimed.has(r.id) && !r.missing) {
-        setMissing.run(r.id);
+        setMissing.run(now, r.id);
         scanState.missing++;
       }
     }
   })();
+
+  // PDFs indexed before document IDs were read: look once ('' = looked, it has none).
+  const unread = db.prepare(`SELECT id, path, size FROM books WHERE missing = 0 AND format = 'pdf' AND file_id IS NULL`).all() as Array<{ id: number; path: string; size: number }>;
+  if (unread.length) {
+    const ids: Array<[string, number]> = [];
+    await mapPool(unread, 8, async (r) => {
+      ids.push([await pdfFileId(path.join(LIBRARY_DIR, r.path), r.size), r.id]);
+    });
+    db.transaction(() => ids.forEach(([fid, id]) => setFileId.run(fid, id)))();
+  }
 
   scanState.added = inserts.length;
   scanState.moved = moves.length;
   scanState.updated = updates.length;
 }
 
-export async function purgeMissing(): Promise<number> {
-  const removed = db.prepare('DELETE FROM books WHERE missing = 1').run().changes;
+/** Forget missing books: all of them, or just these ids (a present book is never touched). */
+export async function purgeMissing(ids?: number[]): Promise<number> {
+  let removed = 0;
+  if (ids) {
+    const del = db.prepare('DELETE FROM books WHERE id = ? AND missing = 1');
+    db.transaction(() => ids.forEach((id) => (removed += Number(del.run(id).changes))))();
+  } else removed = Number(db.prepare('DELETE FROM books WHERE missing = 1').run().changes);
   if (removed) await gcThumbs(); // their covers are now orphaned
   return removed;
+}
+
+/**
+ * You say a missing book and a present one are the same book: its tags, list places and reading progress move
+ * to the present one, and the missing entry is dropped. Nothing is overwritten: tags are added, a list that
+ * already has the present book keeps its own place, and progress is only copied when the present book has none.
+ */
+export async function mergeMissing(fromId: number, intoId: number): Promise<void> {
+  const from = db.prepare('SELECT * FROM books WHERE id = ?').get(fromId) as BookRow | undefined;
+  const into = db.prepare('SELECT * FROM books WHERE id = ?').get(intoId) as BookRow | undefined;
+  if (!from || !into) throw new Error('book not found');
+  if (!from.missing) throw new Error('that book is not missing');
+  if (into.missing || from.id === into.id) throw new Error('pick a book that is present');
+  db.transaction(() => {
+    db.prepare('INSERT OR IGNORE INTO book_tags (book_id, tag_id) SELECT ?, tag_id FROM book_tags WHERE book_id = ?').run(into.id, from.id);
+    db.prepare('UPDATE list_items SET book_id = ? WHERE book_id = ? AND list_id NOT IN (SELECT list_id FROM list_items WHERE book_id = ?)').run(into.id, from.id, into.id);
+    if (into.progress_at === null && from.progress_at !== null) {
+      db.prepare('UPDATE books SET progress_page = ?, progress_at = ?, progress_pos = ?, progress_frac = ? WHERE id = ?').run(
+        from.progress_page, from.progress_at, from.progress_pos, from.progress_frac, into.id,
+      );
+    }
+    // The book was added when it first appeared, not when it was moved: keep the earlier date.
+    if (from.added_at < into.added_at) db.prepare('UPDATE books SET added_at = ? WHERE id = ?').run(from.added_at, into.id);
+    db.prepare('DELETE FROM books WHERE id = ?').run(from.id); // remaining list rows and tags go with it
+  })();
+  await gcThumbs();
 }

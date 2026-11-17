@@ -3,6 +3,7 @@ import { booksChanged, refreshInfo, refreshMeta, refreshSessions, runScan, store
 import { confirmDialog, modal, toast } from './ui.js';
 import { fmtBytes, h, icon } from './util.js';
 import { openReadersManager } from './readers.js';
+import { identityHelp, openMissing } from './missing.js';
 
 export const SORTS = [
   ['title', 'Name'],
@@ -12,6 +13,7 @@ export const SORTS = [
   ['size', 'File size'],
   ['pages', 'Pages'],
   ['read', 'Last read'],
+  ['random', 'Random'],
 ];
 
 export const SIDEBAR_SECTIONS = [['browse', 'Browse'], ['folders', 'Folders'], ['lists', 'Reading lists (and sessions)'], ['tags', 'Tags']];
@@ -36,9 +38,10 @@ const SCHEMA = [
       { key: 'coverFit', label: 'Cover fit', type: 'select', options: [['cover', 'Fill (crop)'], ['contain', 'Fit (letterbox)']], default: 'cover' },
       { key: 'coverRatio', label: 'Cover shape', type: 'select', options: [['2 / 3', 'Portrait 2:3'], ['3 / 4', 'Portrait 3:4'], ['1 / 1', 'Square']], default: '2 / 3' },
       { key: 'titleLines', label: 'Title lines', type: 'select', options: [['1', '1'], ['2', '2'], ['3', '3']], default: '2' },
-      { key: 'groupComics', label: 'Folders with several comics as one card', type: 'checkbox', default: true },
+      { key: 'groupComics', label: 'Multi-part series as one card (folders with several comics)', type: 'checkbox', default: true },
       { key: 'showAuthor', label: 'Show author / folder', type: 'checkbox', default: true },
       { key: 'showFormat', label: 'Show format badge', type: 'checkbox', default: true },
+      { key: 'showPages', label: 'Show page count', type: 'checkbox', default: true },
       { key: 'showTags', label: 'Show tags on cards', type: 'checkbox', default: false },
       { key: 'showProgress', label: 'Show reading progress', type: 'checkbox', default: true },
     ],
@@ -71,6 +74,9 @@ const SCHEMA = [
       { key: 'modePdf', label: 'PDF reading mode', type: 'select', options: [['scroll', 'Continuous scroll'], ['paged', 'One page at a time (horizontal)']], default: 'scroll' },
       { key: 'modeComic', label: 'Comic reading mode', type: 'select', options: [['scroll', 'Continuous scroll'], ['paged', 'One page at a time (horizontal)']], default: 'scroll' },
       { key: 'rtlComic', label: 'Comic page order (one page at a time)', type: 'select', options: [['ltr', 'Left to right'], ['rtl', 'Right to left (manga)']], default: 'ltr' },
+      { key: 'spreadPdf', label: 'PDF pages', type: 'select', options: [['single', 'One at a time'], ['double', 'Two side by side']], default: 'single' },
+      { key: 'spreadComic', label: 'Comic pages', type: 'select', options: [['single', 'One at a time'], ['double', 'Two side by side']], default: 'single' },
+      { key: 'spreadCover', label: 'Two side by side: first page on its own (cover)', type: 'checkbox', default: true },
       { key: 'pagedAnimation', label: 'Animate page turns (one page at a time)', type: 'checkbox', default: true },
       { key: 'pdfWidth', label: 'PDF page width', type: 'range', min: 400, max: 2000, step: 50, unit: 'px', default: 900 },
       { key: 'comicWidth', label: 'Comic page width', type: 'range', min: 300, max: 1800, step: 50, unit: 'px', default: 900 },
@@ -169,7 +175,7 @@ export function applySettings() {
   root.dataset.theme = s.theme;
   root.dataset.coverFit = s.coverFit;
   root.dataset.readerBg = s.readerBg;
-  for (const k of ['showAuthor', 'showFormat', 'showTags', 'showProgress']) root.dataset[k] = s[k] ? '1' : '0';
+  for (const k of ['showAuthor', 'showFormat', 'showPages', 'showTags', 'showProgress']) root.dataset[k] = s[k] ? '1' : '0';
   const set = (k, v) => root.style.setProperty(k, v);
   set('--card-w', `${s.cardWidth}px`);
   set('--gap', `${s.cardGap}px`);
@@ -299,18 +305,12 @@ export function openSettings() {
     toast('Re-reading metadata for every book…');
   });
   const missing = info?.missing ?? 0;
-  const purgeBtn = h('button', { class: 'btn danger', disabled: !missing }, `Forget ${missing} missing book${missing === 1 ? '' : 's'}`);
-  purgeBtn.onclick = busy(purgeBtn, async () => {
-    const ok = await confirmDialog(
-      `Remove ${missing} book(s) whose files are gone from the index? Their tags and list memberships are dropped. Files on disk are never touched.`,
-      { okLabel: 'Forget them', danger: true },
-    );
-    if (!ok) return;
-    const { removed } = await api.post('/purge-missing');
-    await Promise.all([refreshMeta(), refreshInfo()]);
-    booksChanged();
-    toast(`Forgot ${removed} book(s)`);
-  });
+  // Opens the list of missing books, where each can be looked at and forgotten (or all at once).
+  const purgeBtn = h('button', { class: 'btn', title: 'See which books are missing and what Shelf remembers about them' });
+  const missingLabel = () => (purgeBtn.textContent = store.info?.missing ? `Missing books (${store.info.missing})…` : 'Missing books…');
+  missingLabel();
+  refreshInfo().then(missingLabel).catch(() => {}); // the count may have changed since the page loaded
+  purgeBtn.onclick = () => openMissing({ onChange: missingLabel });
   const resetBtn = h('button', { class: 'btn' }, 'Reset display settings');
   resetBtn.onclick = () => {
     try { localStorage.removeItem(KEY); } catch { /* ignore */ }
@@ -427,6 +427,7 @@ export function openSettings() {
     h('div', { class: 'muted small' }, 'Folder: ', h('code', null, info?.libraryDir ?? '…')),
     warn,
     h('div', { class: 'btn-row' }, rescanBtn, rebuildBtn, purgeBtn),
+    identityHelp(),
     h('div', { class: 'muted small' }, 'Display settings are saved with this shelf, so every browser you open it from uses the same ones.'),
     h('div', { class: 'btn-row' }, resetBtn),
     info?.auth

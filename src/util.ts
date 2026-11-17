@@ -32,6 +32,33 @@ export async function fingerprint(file: string, size: number): Promise<string> {
   return h.digest('hex');
 }
 
+/**
+ * A PDF's own document ID: the first string of the /ID entry in the file's trailer. The PDF spec makes it the
+ * permanent identifier, kept when the file is updated (annotations, form fields), so it survives edits that
+ * change the size and content. Returns '' when the file has none (or a useless one). Reads about 40 KB.
+ */
+export async function pdfFileId(file: string, size: number): Promise<string> {
+  const fh = await fs.open(file, 'r');
+  try {
+    const tail = Buffer.allocUnsafe(Math.min(size, 32768));
+    const head = Buffer.allocUnsafe(Math.min(size, 8192));
+    await fh.read(tail, 0, tail.length, Math.max(0, size - tail.length));
+    await fh.read(head, 0, head.length, 0);
+    const re = /\/ID\s*\[\s*<([0-9A-Fa-f]{16,64})>/g;
+    let id = '';
+    for (const buf of [head, tail]) {
+      // The last one wins in the tail (the newest trailer); the head only serves linearized files.
+      for (const m of buf.toString('latin1').matchAll(re)) id = m[1].toLowerCase();
+      if (id && buf === tail) break;
+    }
+    return /^(.)\1*$/.test(id) ? '' : id; // all zeros and the like say nothing
+  } catch {
+    return '';
+  } finally {
+    await fh.close();
+  }
+}
+
 /** Run fn over items with at most `limit` in flight. */
 export async function mapPool<T>(
   items: T[],

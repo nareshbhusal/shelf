@@ -3,7 +3,7 @@ import { createReader } from './reader.js';
 import { addToList, dragHasBooks, readDrop } from './listadd.js';
 import { copyList, createSessionView, openListInViewer, openSessionPicker, unlinkList, viewerItems } from './sessions.js';
 import { applySettings, onSettings, openSettings, setSetting, settings, sidebarOrder, syncSettings } from './settings.js';
-import { appName, events, refreshInfo, refreshMeta, refreshSessions, runScan, store, subscribe, watchScan } from './store.js';
+import { appName, events, refreshInfo, refreshMeta, refreshSessions, startSessionPolling, runScan, store, subscribe, watchScan } from './store.js';
 import { api } from './api.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
 import { debounce, dirSegments, h, hashFor, icon, parseHash, plural, tagColor } from './util.js';
@@ -430,6 +430,7 @@ window.addEventListener('focus', maybeRescan);
 (async () => {
   await Promise.all([refreshMeta(), refreshInfo(), syncSettings()]).catch((e) => toast(e.message, 'error'));
   refreshSessions();
+  startSessionPolling(() => route.name === 'session' || route.name === 'list');
   await onRoute();
   watchScan(); // picks up the scan the server starts on boot; refreshes everything when it ends
 })();

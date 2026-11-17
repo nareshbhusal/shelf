@@ -59,7 +59,9 @@ export function createLibraryView(route) {
   const isRecent = ctx.kind === 'recent';
   const isAdded = ctx.kind === 'added';
   let listSort = 'manual'; // lists default to the order you arranged; this isn't a global setting
-  let books = [];
+  let books = []; // the single books on the page (what can be selected)
+  let entries = []; // what is drawn, in order: books, and series standing for several parts
+  let seed = Math.floor(Math.random() * 2 ** 31) + 1; // "Random" order: fresh for each visit, steady while you tag and edit
   let series = null; // the folder being viewed, when it is a series: {parts, next, state, done, fraction}
   let dirInfo = new Map(); // child folder path -> {kind: plain|group|single, ...} (files view only)
   let loaded = false;
@@ -95,6 +97,10 @@ export function createLibraryView(route) {
     p.set('sort', apiSort());
     p.set('order', sortOrder());
     if (isAdded) p.set('added', String(settings.addedDays));
+    if (apiSort() === 'random') p.set('seed', String(seed));
+    // Parts of a multi-part series stand in as one card, except in reading lists (which order single files) and
+    // on "Recently added" (which is about each new file).
+    if (!isList && !isAdded && settings.groupComics) p.set('series', '1');
     // Comic folders: a folder with 2+ comics is one card; a folder with a single comic shows that comic.
     const folders = ctx.kind === 'files' && route.query.get('r') !== '1' && settings.groupComics;
     if (folders) p.set('collapse', '1');
@@ -104,13 +110,14 @@ export function createLibraryView(route) {
       // A folder with 2+ comics is a series: ask where to carry on reading from.
       let ser = null;
       // (A folder whose only content is one comic is a series of one: it gets the same page.)
-      const comics = data.filter((b) => b.format === 'cbz');
+      const comics = data.filter((b) => b.format === 'cbz' && !b.seriesCard);
       if (ctx.kind === 'files' && route.query.get('r') !== '1' && ctx.dir !== '' && (comics.length >= 2 || (comics.length === 1 && comics[0].group && comics[0].dir === ctx.dir))) {
         ser = await api.get('/series?dir=' + encodeURIComponent(ctx.dir)).catch(() => null);
         if (dead || seq !== reqSeq) return;
       }
       series = ser;
-      books = data;
+      entries = data;
+      books = data.filter((b) => !b.seriesCard);
       dirInfo = new Map(dirs.map((d) => [d.path, d]));
       loaded = true;
       for (const id of [...selected]) if (!books.some((b) => b.id === id)) selected.delete(id);
@@ -139,7 +146,7 @@ export function createLibraryView(route) {
     } else {
       left.append(h('h1', null, title));
     }
-    const count = books.length;
+    const count = books.length + entries.reduce((n, b) => n + (b.seriesCard ? b.seriesCard.matched : 0), 0);
     left.append(h('span', { class: 'muted count' }, loaded ? plural(count, 'book') : ''));
 
     const controls = h('div', { class: 'lib-controls' });
@@ -196,7 +203,11 @@ export function createLibraryView(route) {
         options.map(([v, l]) => h('option', { value: v }, l)),
       );
       controls.append(sel);
-      if (!(isList && listSort === 'manual')) {
+      if (sortKey() === 'random') {
+        controls.append(
+          h('button', { class: 'icon-btn', title: 'Shuffle again', 'aria-label': 'Shuffle again', onClick: () => { seed = Math.floor(Math.random() * 2 ** 31) + 1; load(); } }, icon('shuffle', 16)),
+        );
+      } else if (!(isList && listSort === 'manual')) {
         controls.append(
           h(
             'button',
@@ -456,7 +467,7 @@ export function createLibraryView(route) {
           more.click();
         },
       },
-      h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), check, more, isList ? unlist : null, pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null),
+      h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), book.pages ? h('span', { class: 'badge pg' }, `${book.format === 'epub' ? '~' : ''}${book.pages} p`) : null, check, more, isList ? unlist : null, pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null),
       h(
         'div',
         { class: 'meta' },
@@ -544,7 +555,7 @@ export function createLibraryView(route) {
           pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null,
         ),
       ),
-      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${groupCount(info)}${info.done ? `, ${info.done} read` : pct ? `, ${pct}%` : ''}`)),
+      h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${groupCount(info)}${info.matched != null && info.matched < info.units ? `, ${info.matched} ${isAdded ? 'new' : 'match'}` : ''}${info.done ? `, ${info.done} read` : pct ? `, ${pct}%` : ''}`)),
     );
   }
 
@@ -640,13 +651,19 @@ export function createLibraryView(route) {
         items.push(info?.kind === 'group' ? groupCard(d, info) : folderCard(d));
       }
     }
-    books.forEach((b, i) => {
-      const el = bookCard(b, i);
+    let bi = 0;
+    for (const b of entries) {
+      if (b.seriesCard) {
+        const sc = b.seriesCard;
+        items.push(groupCard({ path: sc.dir, name: sc.name }, { ...sc, matched: sc.matched }));
+        continue;
+      }
+      const el = bookCard(b, bi++);
       cardEls.set(b.id, el);
       items.push(el);
-    });
+    }
 
-    if (!books.length && isAdded) {
+    if (!entries.length && isAdded) {
       content.replaceChildren(h('div', { class: 'grid' }, items), emptyState());
     } else if (!items.length) {
       content.replaceChildren(emptyState());

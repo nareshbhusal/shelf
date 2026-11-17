@@ -45,6 +45,8 @@ const ICONS = {
   check: '<path d="m5 12 5 5 9-10"/>',
   more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
+  spread: '<path d="M12 6c-2-1.6-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13C17 4 14 4.4 12 6z"/><path d="M12 6v13"/>',
+  shuffle: '<path d="M16 3h5v5M4 20 21 3M21 16v5h-5M15 15l6 6M4 4l5 5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   paged: '<rect x="4" y="5" width="7" height="14" rx="1"/><rect x="13" y="5" width="7" height="14" rx="1"/>',
   play: '<path d="M7 4.5v15l12-7.5z"/>',

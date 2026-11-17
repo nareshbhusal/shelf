@@ -381,11 +381,21 @@ export function createSessionView(route) {
     );
   }
 
-  const unsub = subscribe(() => {});
+  // The background refresh (store.js) swaps in fresh data; redraw only when this session or its list changed.
+  const keyOf = () => JSON.stringify([sessionById(uuid), s?.listId ? store.lists.find((l) => l.id === s.listId) : null, store.sessions?.viewers]);
+  let lastKey = '';
+  const unsub = subscribe(() => {
+    if (dead || busy || !loaded || !store.sessions) return;
+    const k = keyOf();
+    if (k === lastKey) return;
+    lastKey = k;
+    const ns = sessionById(uuid);
+    if (ns || s) { s = ns ?? s; render(); }
+  });
   const onVis = () => document.visibilityState === 'visible' && !busy && reload();
   document.addEventListener('visibilitychange', onVis);
   render();
-  reload().then(markReady, markReady);
+  reload().then(() => { lastKey = keyOf(); }).then(markReady, markReady);
 
   return {
     el: root,

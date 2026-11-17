@@ -21,6 +21,8 @@ export interface BookRow {
   progress_page: number;
   progress_at: number | null;
   progress_pos: number | null; // EPUB: how far into the section (0..1)
+  missing_at: number | null;
+  file_id: string | null; // a PDF's own document ID; '' = looked and it has none, null = not looked yet
   progress_frac: number | null; // EPUB: how far through the whole book (0..1), by text length
   is_folder: number; // 1 = a comic that is a folder of loose images (path is the folder)
 }
@@ -115,7 +117,9 @@ CREATE TABLE IF NOT EXISTS books (
   progress_at   INTEGER,
   progress_pos  REAL,
   is_folder     INTEGER NOT NULL DEFAULT 0,
-  progress_frac REAL
+  progress_frac REAL,
+  missing_at    INTEGER,
+  file_id       TEXT
 );
 CREATE INDEX IF NOT EXISTS books_dir ON books(dir);
 CREATE INDEX IF NOT EXISTS books_fp ON books(fingerprint);
@@ -168,6 +172,12 @@ if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).s
 if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'is_folder')) {
   db.exec('ALTER TABLE books ADD COLUMN is_folder INTEGER NOT NULL DEFAULT 0');
 }
+if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'file_id')) {
+  db.exec('ALTER TABLE books ADD COLUMN file_id TEXT');
+}
+if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'missing_at')) {
+  db.exec('ALTER TABLE books ADD COLUMN missing_at INTEGER');
+}
 if (!(db.prepare('PRAGMA table_info(books)').all() as Array<{ name: string }>).some((c) => c.name === 'progress_frac')) {
   db.exec('ALTER TABLE books ADD COLUMN progress_frac REAL');
 }
@@ -188,4 +198,4 @@ if (!(db.prepare('PRAGMA table_info(readers)').all() as Array<{ name: string }>)
 }
 // Highlights/notes are stored inside the PDFs themselves, never here. (Earlier dev builds had a table for them.)
 db.exec('DROP TABLE IF EXISTS annotations');
-db.pragma('user_version = 10');
+db.pragma('user_version = 12');

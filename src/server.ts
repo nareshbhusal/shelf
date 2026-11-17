@@ -12,7 +12,7 @@ import { ds, listSessions, one, pathsFor, SessionError, type SessionOut } from '
 import { EPUB_MIME, epubStructure, pagesFromChars } from './epub.js';
 import { pdfDetails, toolsAvailable } from './meta.js';
 import { applyRename, planRename, renameFolder, RenameError } from './rename.js';
-import { purgeMissing, scanState, startScan } from './scanner.js';
+import { mergeMissing, purgeMissing, scanState, startScan } from './scanner.js';
 import {
   addAnnotation as addNote,
   capabilities as notesCapabilities,
@@ -22,7 +22,7 @@ import {
   NotesError,
   updateAnnotation as updateNote,
 } from './pdfnotes.js';
-import { fingerprint, natCompare } from './util.js';
+import { fingerprint, natCompare, pdfFileId } from './util.js';
 import { comicPages, imageExt, openEntryStream } from './zip.js';
 import { IMAGE_MIME } from './config.js';
 
@@ -282,6 +282,39 @@ app.get('/api/series', (req, res) => {
   });
 });
 
+/** Every folder holding 2+ comics directly (a series), wherever it is: folder path -> what its card shows. */
+interface SeriesInfo { name: string; units: number; pages: number; done: number; fraction: number; cover: { id: number; fingerprint: string } }
+
+function seriesFolders(): Map<string, SeriesInfo> {
+  const rows = db
+    .prepare(`SELECT id, dir, format, filename, fingerprint, pages, progress_page FROM books WHERE missing = 0 AND format = 'cbz' AND dir != ''`)
+    .all() as ComicRow[];
+  const byDir = new Map<string, ComicRow[]>();
+  for (const r of rows) (byDir.get(r.dir) ?? byDir.set(r.dir, []).get(r.dir)!).push(r);
+  const out = new Map<string, SeriesInfo>();
+  for (const [dir, list] of byDir) {
+    if (list.length < 2) continue;
+    list.sort((a, b) => natCompare(a.filename, b.filename));
+    out.set(dir, {
+      name: path.posix.basename(dir),
+      units: list.length,
+      pages: list.reduce((n, c) => n + (c.pages ?? 0), 0),
+      done: list.filter((c) => c.pages && c.progress_page >= c.pages).length,
+      fraction: seriesFraction(list),
+      cover: { id: list[0].id, fingerprint: list[0].fingerprint },
+    });
+  }
+  return out;
+}
+
+/** A well-spread number from a seed and a key, so "random" order is the same each time for one seed. */
+function shuffleKey(seed: number, key: string | number): number {
+  let x = (seed ^ 0x9e3779b9) | 0;
+  for (const ch of String(key)) x = Math.imul(x ^ ch.charCodeAt(0), 0x85ebca6b) ^ (x >>> 13);
+  x = Math.imul(x ^ (x >>> 16), 0xc2b2ae35);
+  return (x ^ (x >>> 16)) >>> 0;
+}
+
 // ---------- books: listing & search ----------
 
 app.get('/api/books', (req, res) => {
@@ -354,7 +387,12 @@ app.get('/api/books', (req, res) => {
   const sort = qstr(req.query.sort) ?? (list ? 'manual' : 'title');
   const dirSign = req.query.order === 'desc' ? -1 : 1;
   const singles = singleWrappers();
-  const sortName = (r: BookX) => (r.format === 'cbz' && singles.get(r.dir)) || r.filename;
+  // series=1: the parts of a multi-part series stand in as one entry (never inside a list, which orders single files).
+  const folders = req.query.series === '1' && !list ? seriesFolders() : new Map<string, SeriesInfo>();
+  if (dir !== undefined) folders.delete(dir); // the series' own page lists its parts
+  const inSeries = (r: BookX) => (r.format === 'cbz' && folders.has(r.dir) ? r.dir : undefined);
+  const sortName = (r: BookX) => (inSeries(r) ? folders.get(r.dir)!.name : (r.format === 'cbz' && singles.get(r.dir)) || r.filename);
+  const seed = Math.floor(Number(qstr(req.query.seed))) || 1;
   const cmp: Record<string, (a: BookX, b: BookX) => number> = {
     title: (a, b) => natCompare(a.title, b.title),
     filename: (a, b) => natCompare(sortName(a), sortName(b)),
@@ -365,17 +403,37 @@ app.get('/api/books', (req, res) => {
     pages: (a, b) => (a.pages ?? 0) - (b.pages ?? 0),
     read: (a, b) => (a.progress_at ?? 0) - (b.progress_at ?? 0),
     manual: (a, b) => (a.position ?? 0) - (b.position ?? 0),
+    // A series is shuffled as one, by its folder, so its parts stay together.
+    random: (a, b) => shuffleKey(seed, inSeries(a) ?? a.id) - shuffleKey(seed, inSeries(b) ?? b.id) || a.id - b.id,
   };
   for (const r of rows) {
     const g = r.format === 'cbz' ? singles.get(r.dir) : undefined;
     if (g) r.title = g; // sorted and shown by the folder's name
+    const sd = inSeries(r);
+    if (sd) r.title = folders.get(sd)!.name; // a series is sorted by its folder's name
   }
   const fn = cmp[sort] ?? cmp.title;
-  rows.sort((a, b) => fn(a, b) * dirSign);
+  rows.sort((a, b) => fn(a, b) * (sort === 'random' ? 1 : dirSign));
 
   const tags = tagMap();
+  const seen = new Map<string, number>(); // series folder -> index in `out`
+  const out: Array<ReturnType<typeof bookDTO> & { seriesCard?: unknown }> = [];
+  for (const r of rows) {
+    const sd = inSeries(r);
+    if (!sd) {
+      out.push(bookDTO(r, tags, singles));
+      continue;
+    }
+    const at = seen.get(sd);
+    if (at !== undefined) {
+      (out[at].seriesCard as { matched: number }).matched++;
+      continue;
+    }
+    seen.set(sd, out.length);
+    out.push({ ...bookDTO(r, tags, singles), seriesCard: { dir: sd, ...folders.get(sd)!, matched: 1 } });
+  }
   const limit = Math.floor(Number(qstr(req.query.limit)) || 0);
-  res.json((limit > 0 ? rows.slice(0, Math.min(limit, 500)) : rows).map((r) => bookDTO(r, tags, singles)));
+  res.json(limit > 0 ? out.slice(0, Math.min(limit, 500)) : out);
 });
 
 app.get('/api/books/:id', (req, res) => {
@@ -396,6 +454,7 @@ app.get('/api/books/:id/info', async (req, res) => {
   res.json({
     ...bookDTO(b, tagMap()),
     metaTitle: b.meta_title,
+    fileId: b.file_id || null,
     location: path.join(HOST_LIBRARY || LIBRARY_DIR, b.path),
     exists: !!st,
     modifiedAt: st?.mtimeMs ?? null,
@@ -1069,7 +1128,8 @@ function pdfOf(idParam: unknown): { book: BookRow; abs: string } {
 /** Our own write changed the file; tell the index so the next scan doesn't see a stranger. */
 async function afterWrite(book: BookRow, abs: string, w: { size: number; mtimeMs: number }) {
   const fp = await fingerprint(abs, w.size);
-  db.prepare('UPDATE books SET size = ?, mtime_ms = ?, fingerprint = ? WHERE id = ?').run(w.size, w.mtimeMs, fp, book.id);
+  const fid = await pdfFileId(abs, w.size);
+  db.prepare("UPDATE books SET size = ?, mtime_ms = ?, fingerprint = ?, file_id = COALESCE(NULLIF(?, ''), file_id, '') WHERE id = ?").run(w.size, w.mtimeMs, fp, fid, book.id);
   return { size: w.size, fingerprint: fp };
 }
 
@@ -1246,15 +1306,22 @@ app.post('/api/readers/:id/open', async (req, res) => {
   }
   if (!books.length) throw new HttpError(400, 'nothing to open');
   if (books.length > 500) throw new HttpError(400, 'too many files (limit 500)');
-  const files = books.map(absPath).filter((f) => fs.existsSync(f));
+  const existing = books.filter((b) => fs.existsSync(absPath(b)));
+  const files = existing.map(absPath);
   if (!files.length) throw new HttpError(404, 'the files are not on disk; try rescanning');
 
   // From Docker the program runs on the host, so it needs the host's idea of where the files are.
   const toHost = (f: string) => (viaHelper ? path.join(HOST_LIBRARY, path.relative(LIBRARY_DIR, f)) : f);
   const targets = files.map(toHost);
+  // {page}: where each book was left off, as the library stores it. An EPUB has no fixed pages, so its page is
+  // the estimate the reader shows (how far through the book, over about 1800 characters a page). A single book
+  // opened from the reader can bring the page you are looking at right now.
+  const live = books.length === 1 && Number.isInteger(req.body?.page) && req.body.page > 0 ? (req.body.page as number) : 0;
+  const leftAt = (b: BookRow) => (b.format === 'epub' ? Math.ceil((b.progress_frac ?? 0) * (b.pages ?? 0)) : b.progress_page);
+  const pages = existing.map((b, i) => (i === 0 && live ? live : Math.max(1, leftAt(b))));
   let argv: string[];
   try {
-    argv = buildArgv(reader.command, targets, { expandHome: !viaHelper }); // the helper expands ~ for the host
+    argv = buildArgv(reader.command, targets, { expandHome: !viaHelper, pages }); // the helper expands ~ for the host
   } catch (e) {
     throw new HttpError(400, (e as Error).message);
   }
@@ -1394,7 +1461,58 @@ app.get('/api/backup', async (_req, res, next) => {
 app.post('/api/scan', (req, res) => res.status(202).json(startScan(req.query.full === '1')));
 app.get('/api/scan', (_req, res) => res.json(scanState));
 
-app.post('/api/purge-missing', async (_req, res) => res.json({ removed: await purgeMissing() }));
+// Books whose files are gone: what Shelf still remembers about each, and any present book that might be it.
+app.get('/api/missing', (_req, res) => {
+  const rows = db.prepare('SELECT * FROM books WHERE missing = 1 ORDER BY COALESCE(missing_at, 0) DESC, path').all() as BookRow[];
+  const tagsOf = db.prepare('SELECT t.name FROM book_tags bt JOIN tags t ON t.id = bt.tag_id WHERE bt.book_id = ? ORDER BY t.name');
+  const listsOf = db.prepare('SELECT l.id, l.name FROM list_items li JOIN lists l ON l.id = li.list_id WHERE li.book_id = ? ORDER BY l.name');
+  const like = db.prepare(`SELECT id, path, title, filename, size, format, pages, meta_title, file_id FROM books
+    WHERE missing = 0 AND format = @format AND (
+      (@fid != '' AND file_id = @fid) OR lower(filename) = lower(@filename) OR size = @size
+      OR (@pages IS NOT NULL AND pages = @pages AND lower(title) = lower(@title)))
+    LIMIT 40`);
+  // Present books that could be this one, with the reasons, strongest first.
+  const candidates = (b: BookRow) => {
+    const out = (like.all({ format: b.format, fid: b.file_id ?? '', filename: b.filename, size: b.size, pages: b.pages, title: b.title }) as Array<BookRow>).map((c) => {
+      const reasons: string[] = [];
+      let score = 0;
+      if (b.file_id && c.file_id === b.file_id) { reasons.push('same PDF ID'); score += 8; }
+      if (b.pages != null && c.pages === b.pages && c.title.toLowerCase() === b.title.toLowerCase()) { reasons.push('same title and page count'); score += 4; }
+      if (c.filename.toLowerCase() === b.filename.toLowerCase()) { reasons.push('same file name'); score += 2; }
+      if (c.size === b.size) { reasons.push('same size'); score += 1; }
+      return { id: c.id, path: c.path, reasons, score };
+    });
+    return out.filter((c) => c.reasons.length).sort((a, b2) => b2.score - a.score).slice(0, 4).map(({ score: _s, ...c }) => c);
+  };
+  res.json(
+    rows.map((b) => ({
+      id: b.id,
+      path: b.path,
+      filename: b.filename,
+      title: b.title,
+      format: b.format,
+      size: b.size,
+      fingerprint: b.fingerprint,
+      addedAt: b.added_at,
+      missingAt: b.missing_at ?? null,
+      tags: (tagsOf.all(b.id) as Array<{ name: string }>).map((t) => t.name),
+      lists: listsOf.all(b.id) as Array<{ id: number; name: string }>,
+      progress: b.progress_page ? { page: b.progress_page, pages: b.pages, at: b.progress_at } : null,
+      maybe: candidates(b),
+    })),
+  );
+});
+// "These are the same book": carry the missing one's tags, lists and progress over to a present one.
+app.post('/api/missing/:id/merge', async (req, res) => {
+  const into = toInt(req.body?.into);
+  try {
+    await mergeMissing(toInt(req.params.id), into);
+  } catch (e) {
+    throw new HttpError(400, e instanceof Error ? e.message : String(e));
+  }
+  res.json({ ok: true, into });
+});
+app.post('/api/purge-missing', async (req, res) => res.json({ removed: await purgeMissing(Array.isArray(req.body?.ids) ? intArray(req.body.ids) : undefined) }));
 
 app.get('/api/info', async (_req, res) => {
   const counts = db

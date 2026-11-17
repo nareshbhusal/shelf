@@ -167,8 +167,9 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   lazily and keyed by the book's fingerprint.
 - After every successful scan, covers that no book refers to any more (book deleted, or edited so
   its fingerprint changed), and stale temp files, are removed, and the database's write-ahead log is
-  folded back in. Files that vanished are only hidden at first; "Forget missing books" in settings
-  drops them and their covers for good. A scan that finds nothing while the index has books is refused,
+  folded back in. Files that vanished are only hidden at first; "Missing books…" in settings lists them
+  (path, when it was noticed, the tags, lists and progress Shelf still holds, and any present book that
+  might be the same) and forgets them one by one or all at once, dropping their covers for good. A scan that finds nothing while the index has books is refused,
   so an unmounted drive can't wipe your tags.
 - Settings shows how much space the index and covers use.
 
@@ -211,6 +212,14 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
 - **Names**: cards show the file name by default; Settings > "Show names from" switches to the
   title found inside the file. Sorting follows the choice. The browser tab title says what you are
   reading and on which page.
+- **Series as one card.** Everywhere a book list is shown (all books, search, tags, recently read or added,
+  "Subfolders"), the parts of a multi-part series (a folder with two or more comics) appear as **one card**
+  that opens the series page; a search or tag filter shows how many of its parts matched. Reading lists
+  always show the single files, since they are ordered file by file, and so does "Recently added", which is
+  about each new file. Settings > Library > "Multi-part series
+  as one card" turns it off everywhere.
+- **Sort** includes **Random**: a shuffle that stays put while you tag and edit and is new on each visit; the
+  shuffle button next to the sort menu draws another. A series is shuffled as one.
 - **Select** books (checkbox on hover, shift-click for ranges, Ctrl+A) then **Tag**, **Add to list**,
   **Open with** or **Rename…**. Type a new name to create a tag or list on the spot.
 - **Rename** (card menu, Details, the selection bar, or "Rename parts…" on a series page). This is the
@@ -238,7 +247,15 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   name and a command, for example
   `okular {file}` or `zathura {files}`. `{file}` is the book, `{files}` every selected book or a whole
   reading list (one argument each), `{dir}` its folder, `{name}` its file name; with none of those the
-  path is appended. Quotes work, pipes and `&&` don't (no shell is involved, which is why a strange
+  path is appended. `{page}` is the page to open at (1-based): where you stopped reading, or 1, or, when
+  you use the program button in the reader's toolbar, the page you are on (`{page0}` counts from 0).
+  Viewers differ in how they take a page, so write it the way yours wants: `qpdfview {file}#{page}`,
+  `okular --page {page} {file}`, `zathura -P {page} {file}`, `evince --page-index={page} {file}`.
+  For several books at once `{files:TEXT}` makes one argument per book with TEXT filled in for each, so
+  every book gets its own page: `qpdfview {files:{file}#{page}}`. `{page}` is always where the library says you
+  stopped; for an EPUB (which has no fixed pages) it is the reader's estimate, so a program may paginate
+  differently. Presets for Okular and qpdfview (plain, at a page, and as tabs) are in the program form; the
+  `#page=N` form for Okular is from its documentation and depends on the version. Quotes work, pipes and `&&` don't (no shell is involved, which is why a strange
   file name can't do anything funny): point the command at your own script for anything fancy.
   A container can't start apps on your desktop by itself, so with Docker `./shelf.sh start` also runs
   a tiny helper on the host (`tools/shelf-opener.py`, Python 3, listens on a private unix socket
@@ -269,14 +286,27 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   third of the page turn it (the middle third still shows or hides the top bar). For comics there is a
   **LTR / RTL** button (`D`) for manga that read right to left: pages, arrow keys and click zones all flip.
   Turning past the end of a part of a series opens the next part (and back from the start, the
-  previous one). EPUBs always scroll. The reader's background follows your theme (Settings > "Reader
+  previous one). **Two pages side by side** (`S`, the book button in the top bar, or Settings > Reader) works
+  in both modes for PDFs and comics: in scroll the pair shares the page width, in one-page-at-a-time mode a
+  turn moves a whole spread. The first page stays alone (a cover; Settings can pair from page 1 instead), a
+  page wider than tall (a double-page spread in one image) stays whole, and the others pair in order. The
+  counter reads "2–3 / 120" and the saved position is the first page of the pair. With RTL the first page of a
+  pair is on the right. EPUBs always scroll. The reader's background follows your theme (Settings > "Reader
   background" has fixed colours too). Click (or tap) in the middle of the page to hide or show the top bar; it
   stays as you left it. Keys: `+` `-` width, `0` fit window, `n` notes panel, `p` pen, `Ctrl+Z` /
-  `Ctrl+Shift+Z` undo and redo, `i` file info, `Esc` back, `f` fullscreen; type a page number to jump. Progress is
+  `Ctrl+Shift+Z` undo and redo, `i` file info, `Esc` back, `f` fullscreen; `g` or a click on the page box, then a page number, to jump. Progress is
   saved and resumed automatically, to the spot within the page (PDF, CBZ) or section (EPUB), not just the page.
   A small page counter sits in the bottom-right corner (it stays when the toolbar is hidden). In a series the
   toolbar says "Part 2/5" with the part's name under it, and the break between parts in continuous scroll reads
   "Part 2 of 5" with the name below; with the toolbar hidden, a brief note names the part you crossed into.
+  **Search in the book** (PDFs and EPUBs; `Ctrl+F` or `/`, or the magnifier in the top bar): the browser's own
+  find only sees what is drawn, and the readers draw only the pages or sections near you, so Shelf searches the
+  whole text itself. Matches are listed with where they are ("p. 12", "Section 3") and the words around them,
+  the first one from where you are reading is selected, `Enter` / `Shift+Enter` step through (wrapping round),
+  clicking a result jumps to it, and the hits are highlighted on the page, the current one stronger. Several
+  words match in order across line breaks; **Aa** matches case; at most 500 matches are listed (it says when
+  there are more); `Esc` closes it and clears the highlights. Scanned PDFs without a text layer have nothing to
+  find. In an EPUB a jump from search offers the Back button. Comics are pictures, so they have no search.
   Page turns in "one page at a time" mode glide; Settings > Reader > "Animate page turns" turns that off.
   EPUB-only keys: `t` contents, `[` `]` smaller/larger text, `←` `→` previous/next section. The (i) button shows everything about the file: location (copyable),
   size, dates, pages, tags, reading lists, progress, number of annotations, fingerprint and, for PDFs,
@@ -323,16 +353,41 @@ Shelf's database. How it writes, because this is the only place Shelf touches yo
 
 ## How tags survive moving files
 
-Books are identified by a content fingerprint (file size plus a hash of three 64 KB samples), not by
-path. When you move or rename a file in Nautilus and rescan, the scanner sees a "new" path whose
-fingerprint matches a vanished one and treats it as a move: same book, same tags, lists, progress.
+Shelf never writes an ID into your books. What it remembers (tags, reading lists, progress, covers, your
+programs) lives in its own database, `shelf.db`, one entry per book holding the book's path and a
+**fingerprint**. The same explanation is in the app (Settings > Library, File info and the Missing books
+list: "How does Shelf recognise a book?").
+
+- **Fingerprint** = SHA-1 of the file size plus three 64 KB samples (start, middle, end; whole file up to
+  192 KB; for a folder of loose images, of the image names and sizes). It follows the *content*, so any
+  edit changes it, including annotations saved by another program. It recognises a file only while that
+  file is unchanged.
+- **Moved or renamed, content untouched**: at each scan, a vanished path and a new file with the same
+  fingerprint and size are the same book, and everything attached follows. This is the only automatic match.
+- **Edited in place** (same path): the size or time changed, so Shelf refreshes the fingerprint and keeps
+  the book. This is how annotations from Okular, qpdfview or Shelf itself leave the identity alone.
+- **Moved or renamed *and* edited before the next scan**: nothing about the content still matches, so the
+  new file looks like a new book and the old entry shows as missing. Settings > Library > Missing books
+  lists those with suggestions (same PDF ID, same title and page count, same file name or size). You
+  confirm with **Merge**, which moves tags, list places and reading progress to the present book and drops
+  the missing entry (a list that already holds the present book keeps its own place; progress is copied only if
+  the present book has none; nothing is overwritten). **Find…** searches the whole library by hand for a
+  book with no suggestions.
+- **PDF ID**: most PDFs carry a permanent document ID in their own trailer (`/ID`), put there by the program
+  that made them and kept by viewers when they add annotations. Shelf reads it (never writes it), stores it
+  and uses it only to rank suggestions; it never merges anything by itself. PDFs without one fall back to
+  title, page count, name and size.
+- Why no ID stamped into the files: that would mean modifying every book in the library (times, hashes,
+  sync and backup churn, read-only drives), and only some formats have a place for it. Annotations are the
+  one thing Shelf writes into a PDF, and only when you make one.
+- Titles, authors and page counts come from the file (PDF info, EPUB metadata, `ComicInfo.xml`) or the file
+  name. They are display and suggestions only.
 
 Limits:
 
-- A file that is **moved and edited** in the same scan can't be matched, so it appears as a new book
-  and the old one as missing. Move first, scan, then edit.
-- **Identical duplicate files** share a fingerprint. They are tracked as separate books, but if you
-  delete one and move the other in the same scan, the tags may attach to either.
+- **Identical duplicate files** share a fingerprint. They are tracked as separate books, but if you delete
+  one and move the other in the same scan, the tags may attach to either.
+- A "Save as" copy with annotations next to the original is simply another book.
 
 ## Formats
 
@@ -359,14 +414,16 @@ its own sandboxed frame and loaded only when you get near it, so large books ope
 - Text size, line spacing and font (serif, sans, or the book's own) from the **Aa** button or `[` `]`; text
   width like the other readers. Colours follow your theme and "reader background" (the book's own text
   and background colours are overridden so dark mode stays readable).
+- **Go to a page**: the page box in the top bar holds the estimated page; type a number, or a percentage
+  (`45%`), and press Enter (`G` focuses the box). A Back button returns you to where you were.
 - Progress is the section plus how far into it, so reopening lands where you stopped. **Pages are an
   estimate**: the amount of text divided by about 1800 characters (a paperback page; a section made of a
-  picture counts as one page), counted once when the book is scanned. Cards show "~312 p", the reader's corner
-  counter shows "p. ~87/~312 · 28%", and the progress bar is the fraction of the book by text, not by sections.
+  picture counts as one page), counted once when the book is scanned. Cards show "~312 p" (bottom-right of the cover; Settings > "Show page count" hides it), the reader's corner
+  counter shows the percentage while the page box in the top bar holds the estimated page, and the progress bar is the fraction of the book by text, not by sections.
 - **Scripts in books never run**, nothing loads from outside the book, and the frames can't submit forms or
   open windows (sandbox plus a strict Content-Security-Policy on every file served from inside an EPUB).
 - Sloppy XHTML that isn't well-formed XML is shown through the forgiving HTML parser instead.
-- Not there yet: highlights/notes in EPUBs, search inside a book, paged mode, fixed-layout books (shown as
+- Not there yet: highlights/notes in EPUBs, paged and two-page modes, fixed-layout books (shown as
   flowing text), DRM-protected books (can't be read at all).
 
 ## Sessions (docsessions)
@@ -408,6 +465,10 @@ none of this appears. If the program can't be found Shelf says so in the sidebar
 - **Turning it on and off.** docsessions is an external app: Settings has a switch for it. Off hides every
   trace of it (sidebar, menus, badges) and refuses its routes; links are kept and wake up when it is on again.
   Without the command configured, the switch isn't offered.
+- **Staying current.** Whether a session is open is refreshed in the background: every 4 s while a session or
+  reading-list page is showing (2 s while one is starting), every 15 s elsewhere, never while the tab is
+  hidden, and the screen only redraws when something actually changed. Each refresh is one
+  `docsessions list` call.
 - **While a session is open** its documents follow the viewer: adding is allowed and goes into a queue that
   applies on Restart; removing or moving an open document and deleting the session are refused (docsessions'
   rule). Documents whose file doesn't exist yet are listed under "Waiting for the file".
