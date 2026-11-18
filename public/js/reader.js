@@ -262,9 +262,10 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   }
   let lastPct = -1;
   /**
-   * An open book has a stack of pages on either side. Each stack's thickness follows how many pages are on that side,
-   * but it fills in quickly, so a book looks substantial after a fifth of it (at most 40 pages) and thins out again over
-   * the last stretch: on the final spread the right side is just the cover's edge and all the volume is on the left.
+   * An open book has a stack of pages on either side. Mostly the thickness fills in quickly, so a book looks substantial
+   * after a fifth of it (at most 40 pages) and thins out again over the last stretch; the rest stays in proportion to the
+   * pages on that side, so the two stacks still tell you how far through you are. On the final spread the unread side is
+   * flat and all the volume is on the left.
    */
   function paintEdges() {
     if (isEpub || !(total > 1)) return;
@@ -273,7 +274,10 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     const ahead = Math.max(0, total - (g ? Math.max(...g) : currentPage));
     const ref = Math.max(1, Math.min(40, total * 0.2));
     const full = clamp(total / 14, 2, 14); // a long book is a thick one
-    const side = (n) => 1 + full * (1 - (1 - Math.min(1, n / ref)) ** 2);
+    const side = (n) => {
+      const quick = 1 - (1 - Math.min(1, n / ref)) ** 2;
+      return n <= 0 ? 1 : 1 + full * (0.6 * quick + 0.4 * (n / total));
+    };
     root.style.setProperty('--edge-read', `${side(behind).toFixed(2)}px`);
     root.style.setProperty('--edge-rest', `${side(ahead).toFixed(2)}px`);
   }

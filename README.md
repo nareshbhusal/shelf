@@ -538,7 +538,8 @@ Next with the Sans option); "The book's own" leaves the book's fonts alone.
 In scroll mode PDFs get a small page number on the desk beside each page (Settings > "Scrolling: page numbers between pages" turns
 them off) and extra space between rows and spreads, so two-page spreads stacked down the screen read as separate
 openings. The two stacks of pages beside an open book follow how many pages are on each side: nothing behind you on the first
-page, a full stack on both sides by page 40 (or a fifth of a short book), and by the last spread the unread side is
+page, most of the volume on the left by page 40 (or a fifth of a short book) while the right stack stays a little thicker until
+you pass the middle, and by the last spread the unread side is
 flat and the volume is all on the left.
 
 **What cards show.** Settings > Library has a choice for each of the author / folder line, the format badge, the page
