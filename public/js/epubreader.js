@@ -143,6 +143,10 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
     return tops[i] + clamp(pg, 0, k - 1) * geo.vw;
   }
   const scrollToPos = (i, pos) => setOff(Math.max(0, offsetFor(i, { pos })));
+  /** Flipping: a section's page count is only final once its text has loaded and its fonts have arrived, which can be after
+   *  we have landed. Until then, if it changes, put the page back on the same fraction of the section (unless you turned a page). */
+  let anchor = null;
+  const anchorTo = (i, pos, ms = 2000) => { if (paged) anchor = { i, pos, stamp: userStamp, until: Date.now() + ms }; };
 
   /** A section changed height. If it lies wholly above the viewport, shift the scroll to keep the text still. */
   function setH(sec, hh) {
@@ -154,7 +158,8 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
     const delta = hh - sec.h;
     sec.h = hh;
     applyExtent(sec);
-    if (above) setOff(off() + delta);
+    if (paged && anchor && anchor.i === sec.i && Date.now() < anchor.until && anchor.stamp === userStamp) scrollToPos(anchor.i, anchor.pos);
+    else if (above) setOff(off() + delta);
     schedule();
   }
 
@@ -652,6 +657,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       await mount(secs[i]);
       if (mine !== jumpSeq || dead) return;
       scrollToPos(i, clamp(pos ?? 0, 0, 1));
+      anchorTo(i, clamp(pos ?? 0, 0, 1));
       setTimeout(() => {
         if (dead || mine !== jumpSeq || stamp !== userStamp) return;
         pendingIdx = -1;
@@ -668,6 +674,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       await mount(secs[i]);
       if (mine !== jumpSeq || dead) return restoring = false;
       scrollToPos(i, clamp(pos ?? 0, 0, 1));
+      anchorTo(i, clamp(pos ?? 0, 0, 1));
       setTimeout(() => {
         if (dead) return;
         if (mine === jumpSeq && stamp === userStamp) scrollToPos(i, clamp(pos ?? 0, 0, 1));
@@ -703,7 +710,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       // and don't report positions in the meantime.
       restoring = true;
       const mine = ++jumpSeq;
-      const back = () => !dead && paged === want && mine === jumpSeq && scrollToPos(p.i, p.pos);
+      const back = () => { if (dead || paged !== want || mine !== jumpSeq) return; scrollToPos(p.i, p.pos); anchorTo(p.i, p.pos, 1500); };
       for (const t of [30, 150, 400]) setTimeout(back, t);
       setTimeout(() => {
         if (dead || mine !== jumpSeq) return;

@@ -233,7 +233,10 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   drives reject, length, clashes with other books, with files not yet indexed, or within the batch)
   and if anything is wrong nothing is renamed. Swapping names works. The book keeps its identity, so tags,
   lists, reading progress and covers stay with it; a toast offers **Undo** afterwards.
-- **Search** (press `/`) matches title, author, series, file name, path and tag names.
+- **Search** (press `/`) matches title, author, series, file name, path and tag names. It stays where you are: inside a
+  folder it searches that folder and everything below it, in a reading list or "recently read" only those books, and in
+  all books it keeps your tag and format filters. A line under the title says so and offers **Search the whole library**.
+  Going to another place from the sidebar empties the box.
 - **Reading lists** keep a manual order; drag cards to reorder. "Open list with…" in a list's header
   sends the whole list, in order, to one of your programs. To fill a list: type in the field at the top of its
   page (results can be picked with the mouse or Enter, several in a row; a pasted link or path works too),
@@ -420,7 +423,7 @@ its own sandboxed frame and loaded only when you get near it, so large books ope
   (`45%`), and press Enter (`G` focuses the box). A Back button returns you to where you were.
 - Progress is the section plus how far into it, so reopening lands where you stopped. **Pages are an
   estimate**: the amount of text divided by about 1800 characters (a paperback page; a section made of a
-  picture counts as one page), counted once when the book is scanned. Cards show "~312 p" (bottom-right of the cover; Settings > "Show page count" hides it), the reader's corner
+  picture counts as one page), counted once when the book is scanned. Cards show "~312 p" (bottom-right of the cover; Settings > Library > "Page count" hides it or shows it only on hover), the reader's corner
   counter shows the percentage while the page box in the top bar holds the estimated page, and the progress bar is the fraction of the book by text, not by sections.
 - **Scripts in books never run**, nothing loads from outside the book, and the frames can't submit forms or
   open windows (sandbox plus a strict Content-Security-Policy on every file served from inside an EPUB).
@@ -534,4 +537,20 @@ Next with the Sans option); "The book's own" leaves the book's fonts alone.
 
 In scroll mode PDFs get a small page number on the desk beside each page (Settings > "Scrolling: page numbers between pages" turns
 them off) and extra space between rows and spreads, so two-page spreads stacked down the screen read as separate
-openings. The page block's edges grow on the side you have read as you go through the book.
+openings. The two stacks of pages beside an open book follow how many pages are on each side: nothing behind you on the first
+page, a full stack on both sides by page 40 (or a fifth of a short book), and by the last spread the unread side is
+flat and the volume is all on the left.
+
+**What cards show.** Settings > Library has a choice for each of the author / folder line, the format badge, the page
+count, tags and the reading-progress bar: *Always*, *On hover* (it fades in while the pointer is on the card, or the
+card is selected or has keyboard focus; touch screens, which cannot hover, always show it) or *Never*. The progress bar
+also has *Until finished*, which hides it once a book is done. Old on/off settings carry over as Always / Never.
+
+**Keys while scrolling.** ← and → do not animate: in a PDF or comic they go to the previous / next page (or spread, in
+two-page view; a page wider than the window moves sideways instead), in an EPUB to the previous / next section, and a
+held key keeps stepping. ↑ ↓ Space and PageUp/PageDown scroll as the browser does.
+
+**Memory.** Only the pages within about a screen and a third of the view are drawn, and each page lets go of its parsed
+data after drawing. A 350-page, 15 MB PDF takes roughly 250 to 500 MB in the browser while open (the PDF library, the
+file itself and the drawn pages; more on a high-resolution screen and in two-page view) and it comes back down when you
+leave the book.

@@ -261,12 +261,21 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     queueSave();
   }
   let lastPct = -1;
-  /** An open book's page block is thicker on the side you have read: the two edges of a spread follow the progress. */
+  /**
+   * An open book has a stack of pages on either side. Each stack's thickness follows how many pages are on that side,
+   * but it fills in quickly, so a book looks substantial after a fifth of it (at most 40 pages) and thins out again over
+   * the last stretch: on the final spread the right side is just the cover's edge and all the volume is on the left.
+   */
   function paintEdges() {
-    const f = total > 1 && !isEpub ? clamp((currentPage - 1) / (total - 1), 0, 1) : 0;
-    const thick = clamp((total || 0) / 14, 0, 14); // a long book is a thick one
-    root.style.setProperty('--edge-read', `${(3 + thick * f).toFixed(2)}px`);
-    root.style.setProperty('--edge-rest', `${(3 + thick * (1 - f)).toFixed(2)}px`);
+    if (isEpub || !(total > 1)) return;
+    const g = spread ? impl?.spreadOf?.(currentPage) : null;
+    const behind = Math.max(0, (g ? Math.min(...g) : currentPage) - 1);
+    const ahead = Math.max(0, total - (g ? Math.max(...g) : currentPage));
+    const ref = Math.max(1, Math.min(40, total * 0.2));
+    const full = clamp(total / 14, 2, 14); // a long book is a thick one
+    const side = (n) => 1 + full * (1 - (1 - Math.min(1, n / ref)) ** 2);
+    root.style.setProperty('--edge-read', `${side(behind).toFixed(2)}px`);
+    root.style.setProperty('--edge-rest', `${side(ahead).toFixed(2)}px`);
   }
 
   function setCurrent(n, partId) {
@@ -278,6 +287,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     pageInput.value = String(n);
     setTitles();
     paintProgress();
+    paintEdges();
     showPart();
     queueSave();
   }
@@ -387,6 +397,22 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   function turn(n) {
     impl?.step?.(n);
   }
+  /**
+   * ← / → while scrolling: no animation, so it is as quick as the key repeats. A page wider than the window moves
+   * sideways; otherwise it is the previous / next page (or spread, or EPUB section).
+   */
+  function sideStep(dir) {
+    if (isEpub) return impl?.step(dir);
+    if (scroller.scrollWidth > scroller.clientWidth + 2) return scroller.scrollBy({ left: dir * Math.max(160, scroller.clientWidth * 0.15), behavior: 'instant' });
+    // The page counter lags a moment behind a jump, so quick presses (or a held key) count from where the last one went.
+    const from = Date.now() - sideAt.t < 700 ? sideAt.n : currentPage;
+    const g = spread ? impl?.spreadOf?.(from) : null;
+    const to = dir > 0 ? (g ? Math.max(...g) : from) + 1 : (g ? Math.min(...g) : from) - 1;
+    if (to < 1 || to > (total || 1)) return;
+    sideAt = { n: to, t: Date.now() };
+    impl?.goTo(to, false);
+  }
+  let sideAt = { n: 0, t: 0 };
 
   function setWidthSetting(px) {
     px = clamp(Math.round(px / 10) * 10, 200, 3000);
@@ -482,8 +508,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     switch (e.key) {
       case 'Escape': if (!search?.consumeEscape() && !ann?.consumeEscape() && !impl?.consumeEscape?.()) location.hash = backHref; break;
       case '/': if (search) { search.open(); e.preventDefault(); } break;
-      case 'ArrowLeft': if (isEpub && mode !== 'paged') impl?.step(-1); else if (mode === 'paged') { turn(rtl ? 1 : -1); e.preventDefault(); } break;
-      case 'ArrowRight': if (isEpub && mode !== 'paged') impl?.step(1); else if (mode === 'paged') { turn(rtl ? -1 : 1); e.preventDefault(); } break;
+      case 'ArrowLeft': if (mode === 'paged') turn(rtl ? 1 : -1); else sideStep(-1); e.preventDefault(); break;
+      case 'ArrowRight': if (mode === 'paged') turn(rtl ? -1 : 1); else sideStep(1); e.preventDefault(); break;
       case 'm': case 'M': toggleMode(); break;
       case 'd': case 'D': if (dirBtn && (mode === 'paged' || spread)) setSetting('rtlComic', rtl ? 'ltr' : 'rtl'); break;
       case 's': case 'S': toggleSpread(); break;
@@ -916,6 +942,7 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
   }
 
   const imgsOf = (i = cur) => mounted.get(i)?.imgs ?? [];
+  let settleTimer = 0;
   function goTo(n, smooth, pos = 0, i = cur) {
     const img = imgsOf(i)[n - 1];
     if (!img) return;
@@ -925,7 +952,8 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
     }
     scrollToPage(scroller, img, smooth, pos);
     // Pages above us finish loading and change height; settle onto the target once more afterwards.
-    if (!smooth) setTimeout(() => scrollToPage(scroller, img, false, pos), 400);
+    clearTimeout(settleTimer); // a newer jump replaces the settling of an older one
+    if (!smooth) settleTimer = setTimeout(() => scrollToPage(scroller, img, false, pos), 400);
   }
 
   return {
@@ -1191,7 +1219,7 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
         if (token !== p.token) return;
         await new pdfjs.TextLayer({ textContentSource: tc, container: textDiv, viewport }).render();
         if (token === p.token) applyMarks(p);
-      }).catch(() => {});
+      }).catch(() => {}).finally(() => page.cleanup()); // let go of the page's parsed operators and decoded images; they are rebuilt if it's drawn again
     } catch (e) {
       if (e?.name === 'RenderingCancelledException') return;
       console.warn(`page ${p.n} failed`, e);
@@ -1212,7 +1240,7 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
     }
   }
 
-  // Render pages within ~2 screens of the viewport; free the rest so 1000-page PDFs don't eat RAM.
+  // Render pages within ~1.3 screens of the viewport; free the rest so 1000-page PDFs don't eat RAM.
   let lifecycle = null;
   function watchVisibility() {
     lifecycle?.disconnect();
@@ -1225,7 +1253,7 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
           else release(p);
         }
       },
-      { root: scroller, rootMargin: paged ? '0px 150% 0px 150%' : '200% 0px 200% 0px' },
+      { root: scroller, rootMargin: paged ? '0px 150% 0px 150%' : '130% 0px 130% 0px' },
     );
     pages.forEach((p) => lifecycle.observe(p.el));
   }
@@ -1259,6 +1287,7 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
     }
   })();
 
+  let settleTimer = 0;
   const self = {
     searchSource,
     setWidth(px) {
@@ -1284,7 +1313,8 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
         return;
       }
       scrollToPage(scroller, p.el, smooth, pos);
-      if (!smooth) setTimeout(() => scrollToPage(scroller, p.el, false, pos), 500);
+      clearTimeout(settleTimer); // a newer jump replaces the settling of an older one
+      if (!smooth) settleTimer = setTimeout(() => scrollToPage(scroller, p.el, false, pos), 500);
     },
     /** Paged mode: n turns forward (negative: back); a turn is one page, or two side by side. */
     step(n) {

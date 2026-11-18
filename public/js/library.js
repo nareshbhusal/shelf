@@ -35,7 +35,7 @@ function describe(route) {
     const dir = route.rest.join('/');
     ctx.dir = dir;
     params.set('dir', dir);
-    if (q.get('r') === '1') params.set('recursive', '1');
+    if (q.get('r') === '1' || q.get('q')) params.set('recursive', '1'); // a search covers the folder and everything below it
     crumbs = [{ label: 'Library', href: hashFor('files', [], q.get('r') === '1' ? { r: 1 } : {}) }];
     route.rest.forEach((seg, i) =>
       crumbs.push({ label: seg, href: hashFor('files', route.rest.slice(0, i + 1), q.get('r') === '1' ? { r: 1 } : {}) }),
@@ -57,11 +57,15 @@ function describe(route) {
     else if (q.get('untagged') === '1') title = 'Untagged';
     else if (q.get('tags')) title = 'Tagged';
   }
+  if (route.name !== 'all' && q.get('q')) params.set('q', q.get('q')); // searching inside a folder, list or "recent" stays inside it
   return { params, crumbs, title, ctx };
 }
 
 export function createLibraryView(route) {
   const { params, crumbs, title, ctx } = describe(route);
+  const isRec = () => route.query.get('r') === '1' || !!route.query.get('q'); // folders: with subfolders, which a search always has
+  const searchQ = route.query.get('q') || '';
+  const scoped = !!searchQ && route.name !== 'all'; // a search inside a folder, list or "recent"
   const isList = ctx.kind === 'list';
   const isRecent = ctx.kind === 'recent';
   const isAdded = ctx.kind === 'added';
@@ -108,7 +112,7 @@ export function createLibraryView(route) {
     // on "Recently added" (which is about each new file).
     if (!isList && !isAdded && settings.groupComics) p.set('series', '1');
     // Comic folders: a folder with 2+ comics is one card; a folder with a single comic shows that comic.
-    const folders = ctx.kind === 'files' && route.query.get('r') !== '1' && settings.groupComics;
+    const folders = ctx.kind === 'files' && !isRec() && settings.groupComics;
     if (folders) p.set('collapse', '1');
     try {
       const [data, dirs] = await Promise.all([api.get('/books?' + p), folders ? api.get('/dirs?parent=' + encodeURIComponent(ctx.dir)) : []]);
@@ -117,7 +121,7 @@ export function createLibraryView(route) {
       let ser = null;
       // (A folder whose only content is one comic is a series of one: it gets the same page.)
       const comics = data.filter((b) => b.format === 'cbz' && !b.seriesCard);
-      if (ctx.kind === 'files' && route.query.get('r') !== '1' && ctx.dir !== '' && (comics.length >= 2 || (comics.length === 1 && comics[0].group && comics[0].dir === ctx.dir))) {
+      if (ctx.kind === 'files' && !isRec() && ctx.dir !== '' && (comics.length >= 2 || (comics.length === 1 && comics[0].group && comics[0].dir === ctx.dir))) {
         ser = await api.get('/series?dir=' + encodeURIComponent(ctx.dir)).catch(() => null);
         if (dead || seq !== reqSeq) return;
       }
@@ -163,7 +167,7 @@ export function createLibraryView(route) {
     }
 
     if (ctx.kind === 'files') {
-      const rec = route.query.get('r') === '1';
+      const rec = isRec();
       controls.append(
         h(
           'label',
@@ -171,6 +175,7 @@ export function createLibraryView(route) {
           h('input', {
             type: 'checkbox',
             checked: rec,
+            disabled: !!searchQ,
             onChange: (e) => {
               const query = {};
               if (e.target.checked) query.r = 1;
@@ -300,6 +305,14 @@ export function createLibraryView(route) {
         h('a', { class: 'seg-pill' + (fmt === f ? ' on' : ''), href: hashFor('all', [], { q: route.query.get('q'), tags: route.query.get('tags'), untagged: route.query.get('untagged'), format: fmt === f ? '' : f }) }, f.toUpperCase());
       items.push(h('span', { class: 'spacer' }), ...['pdf', 'cbz', 'epub'].filter((f) => (store.info?.byFormat?.[f] ?? 0) > 0).map(addFmt));
     }
+    if (scoped) {
+      // The search stays in the folder / list you are looking at; one click widens it.
+      const where = ctx.kind === 'files' ? (ctx.dir ? `“${ctx.dir.split('/').at(-1)}” and its subfolders` : 'the library') : ctx.kind === 'list' ? `“${title}”` : title.toLowerCase();
+      items.push(
+        h('span', { class: 'scope-note' }, `Searching ${where} only.`),
+        h('a', { class: 'scope-link', href: hashFor('all', [], { q: searchQ }) }, 'Search the whole library'),
+      );
+    }
     filters.replaceChildren(...items);
     filters.classList.toggle('hidden', !items.length);
   }
@@ -413,7 +426,7 @@ export function createLibraryView(route) {
   }
 
   function bookCard(book, index) {
-    const inDir = ctx.kind === 'files' && route.query.get('r') !== '1' && settings.groupComics ? ctx.dir : null;
+    const inDir = ctx.kind === 'files' && !isRec() && settings.groupComics ? ctx.dir : null;
     const pct = finishedPct(book);
     const sub = isAdded ? `Added ${ago(book.addedAt)}` : book.author ?? (book.series ? book.series + (book.number ? ` #${book.number}` : '') : book.group ? '' : book.dir.split('/').at(-1) ?? '');
     const check = h(
@@ -479,7 +492,7 @@ export function createLibraryView(route) {
           more.click();
         },
       },
-      h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), book.pages ? h('span', { class: 'badge pg' }, `${book.format === 'epub' ? '~' : ''}${book.pages} p`) : null, check, more, isList ? unlist : null, pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null),
+      h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), book.pages ? h('span', { class: 'badge pg' }, `${book.format === 'epub' ? '~' : ''}${book.pages} p`) : null, check, more, isList ? unlist : null, pct ? h('div', { class: 'progress' + (pct >= 98 ? ' done' : '') }, h('i', { style: { width: `${pct}%` } })) : null),
       h(
         'div',
         { class: 'meta' },
@@ -528,7 +541,7 @@ export function createLibraryView(route) {
   }
 
   function folderCard(d) {
-    const rec = route.query.get('r') === '1';
+    const rec = isRec();
     const more = folderMore(d, d.total);
     return h(
       'a',
@@ -542,7 +555,7 @@ export function createLibraryView(route) {
 
   /** A folder holding 2+ comics: one card, named after the folder, covered by its first comic. */
   function groupCard(d, info) {
-    const rec = route.query.get('r') === '1';
+    const rec = isRec();
     const pct = Math.floor((info.fraction ?? 0) * 100);
     const img = h('img', { loading: 'lazy', decoding: 'async', alt: '', draggable: false });
     img.src = coverUrl(info.cover);
@@ -564,7 +577,7 @@ export function createLibraryView(route) {
           h('div', { class: 'cover' }, h('div', { class: 'ph', style: { background: `hsl(${hueOf(d.name)} 32% 26%)` } }, h('span', null, initials(d.name))), img),
           h('span', { class: 'badge fmt' }, `×${info.units}`),
           more,
-          pct ? h('div', { class: 'progress' }, h('i', { style: { width: `${pct}%` } })) : null,
+          pct ? h('div', { class: 'progress' + (pct >= 98 ? ' done' : '') }, h('i', { style: { width: `${pct}%` } })) : null,
         ),
       ),
       h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${groupCount(info)}${info.matched != null && info.matched < info.units ? `, ${info.matched} ${isAdded ? 'new' : 'match'}` : ''}${info.done ? `, ${info.done} read` : pct ? `, ${pct}%` : ''}`)),
@@ -655,7 +668,7 @@ export function createLibraryView(route) {
     const items = [];
     if (isAdded) items.push(addedNote());
     const panel = series ? seriesPanel() : null;
-    if (ctx.kind === 'files' && route.query.get('r') !== '1') {
+    if (ctx.kind === 'files' && !isRec()) {
       const dir = route.rest.join('/');
       for (const d of store.tree.dirs.filter((x) => x.parent === dir)) {
         const info = dirInfo.get(d.path);

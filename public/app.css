@@ -135,6 +135,8 @@ input[type="range"] { accent-color: var(--accent); }
 .seg button { background: var(--bg2); border: 0; padding: 5px 9px; color: var(--muted); display: inline-flex; }
 .seg button.on { background: var(--bg3); color: var(--accent-ink); box-shadow: inset 0 -2px 0 var(--accent); }
 .filter-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.scope-note { color: var(--muted); font-size: .9rem; }
+.scope-link { font-size: .9rem; }
 .filter-pill { display: inline-flex; align-items: center; gap: 6px; background: var(--bg3); border-radius: 99px; padding: 2px 8px 2px 2px; color: var(--muted); }
 .seg-pill { padding: 3px 10px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); font-size: .8rem; }
 .seg-pill.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
@@ -148,7 +150,17 @@ input[type="range"] { accent-color: var(--accent); }
 .chip.plain { --c: var(--muted); }
 .chip .dot { width: 7px; height: 7px; }
 .tags { display: none; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
-html[data-show-tags="1"] .tags:not(:empty) { display: flex; }
+
+/* what a card shows (Settings > Library): always, only while the pointer is on it, or never */
+.badge, .progress, .sub, .tags { transition: opacity .16s; }
+html[data-show-format="never"] .badge.fmt, html[data-show-pages="never"] .badge.pg, html[data-show-progress="never"] .progress, html[data-show-author="never"] .sub { display: none; }
+html[data-show-progress="unfinished"] .progress.done { display: none; }
+html[data-show-tags="always"] .tags:not(:empty), html[data-show-tags="hover"] .tags:not(:empty) { display: flex; }
+html[data-show-format="hover"] .badge.fmt, html[data-show-pages="hover"] .badge.pg, html[data-show-progress="hover"] .progress, html[data-show-author="hover"] .sub, html[data-show-tags="hover"] .tags { opacity: 0; }
+html[data-show-format="hover"] .card:is(:hover, :focus-visible, .selected) .badge.fmt, html[data-show-pages="hover"] .card:is(:hover, :focus-visible, .selected) .badge.pg,
+html[data-show-progress="hover"] .card:is(:hover, :focus-visible, .selected) .progress, html[data-show-author="hover"] .card:is(:hover, :focus-visible, .selected) .sub,
+html[data-show-tags="hover"] .card:is(:hover, :focus-visible, .selected) .tags { opacity: 1; }
+@media (hover: none) { html[data-show-format="hover"] .badge.fmt, html[data-show-pages="hover"] .badge.pg, html[data-show-progress="hover"] .progress, html[data-show-author="hover"] .sub, html[data-show-tags="hover"] .tags { opacity: 1; } } /* no pointer to hover with */
 
 /* grid view */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-w), 1fr)); gap: calc(var(--gap) * 1.7) var(--gap); align-items: stretch; }
@@ -164,8 +176,6 @@ html[data-show-tags="1"] .tags:not(:empty) { display: flex; }
 .cover .ph::before { content: ""; position: absolute; inset: 9% 11%; border: 1px solid rgba(255,255,255,.32); }
 .badge { position: absolute; z-index: 2; left: 8px; top: 8px; font-size: .62rem; font-weight: 700; letter-spacing: .06em; padding: 1px 6px; border-radius: 3px; background: rgba(12,18,20,.7); color: #f1eee4; backdrop-filter: blur(2px); font-variant-numeric: tabular-nums; }
 .badge.pg { left: auto; right: 8px; top: auto; bottom: 10px; letter-spacing: .02em; }
-html[data-show-format="0"] .badge.fmt { display: none; }
-html[data-show-pages="0"] .badge.pg { display: none; }
 .check, .more { position: absolute; z-index: 2; top: 6px; width: 26px; height: 26px; border-radius: 50%; border: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.62); color: #fff; padding: 0; }
 .check { right: 6px; border: 2px solid rgba(255,255,255,.85); background: rgba(0,0,0,.35); color: transparent; }
 .more { right: 38px; }
@@ -174,13 +184,11 @@ html[data-show-pages="0"] .badge.pg { display: none; }
 .card.selected .cover-wrap { outline: 3px solid var(--accent); outline-offset: -3px; }
 .progress { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,.45); }
 .progress i { display: block; height: 100%; background: var(--accent); }
-html[data-show-progress="0"] .progress { display: none; }
 .meta { padding: 7px 2px 0; min-width: 0; }
 /* grid view: the lip of the shelf. Each card's lip runs half a gap past its sides, so a row's lips join into one board. */
 .lib-content:not(.view-list) .meta { flex: 1; margin-inline: calc(var(--gap) / -2); padding: 11px calc(var(--gap) / 2 + 3px) 15px; background: var(--shelf); box-shadow: inset 0 1px 0 var(--shelf-hi), inset 0 -3px 0 var(--shelf-lo); }
 .title { font-family: var(--serif); font-size: .93rem; font-weight: 600; line-height: 1.28; display: -webkit-box; -webkit-line-clamp: var(--title-lines); -webkit-box-orient: vertical; overflow: hidden; word-break: break-word; }
 .sub { font-size: .8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-html[data-show-author="0"] .sub { display: none; }
 .row-info { display: none; }
 .folder-art { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--accent-ink); background: repeating-linear-gradient(45deg, rgba(255,255,255,.025) 0 2px, transparent 2px 4px), repeating-linear-gradient(-45deg, rgba(0,0,0,.05) 0 2px, transparent 2px 4px), color-mix(in srgb, var(--accent) 13%, var(--bg3)); } /* book-cloth */
 .card.folder .cover-wrap { border: 0; }

@@ -50,17 +50,21 @@ document.body.addEventListener('click', (e) => {
 });
 
 // ---------------------------------------------------------------- search
+// A search stays in the place you are (a folder, a list, "recent"…); the library view offers a link to search everything.
+const SCOPED = new Set(['all', 'files', 'list', 'recent', 'added']);
 const goSearch = debounce(() => {
   const q = searchInput.value.trim();
-  if (!q) {
-    if (route.name === 'all' && route.query.get('q')) location.hash = hashFor('all', [], { tags: route.query.get('tags'), format: route.query.get('format') });
-    return;
-  }
-  const keep = route.name === 'all' ? { tags: route.query.get('tags'), format: route.query.get('format'), untagged: route.query.get('untagged') } : {};
-  const next = hashFor('all', [], { q, ...keep });
-  // Replace while typing so the back button isn't a pile of keystrokes.
-  if (route.name === 'all') history.replaceState(null, '', next), onRoute();
-  else location.hash = next;
+  if (SCOPED.has(route.name)) {
+    const qs = new URLSearchParams(route.query);
+    if (q) qs.set('q', q);
+    else if (qs.has('q')) qs.delete('q');
+    else return;
+    const path = route.raw.split('?')[0];
+    const next = '#' + path + (qs.toString() ? `?${qs}` : '');
+    // Replace while typing so the back button isn't a pile of keystrokes.
+    history.replaceState(null, '', next);
+    onRoute();
+  } else if (q) location.hash = hashFor('all', [], { q });
 }, 250);
 searchInput.addEventListener('input', goSearch);
 searchInput.addEventListener('keydown', (e) => {
@@ -387,9 +391,7 @@ async function onRoute() {
     main.replaceChildren(v.el);
     main.scrollTop = 0;
     document.title = `${v.title} — ${appName()}`;
-    if (route.name === 'all') {
-      if (document.activeElement !== searchInput) searchInput.value = route.query.get('q') ?? '';
-    } else searchInput.value = '';
+    if (document.activeElement !== searchInput) searchInput.value = route.query.get('q') ?? '';
   }
   renderSidebar();
 }

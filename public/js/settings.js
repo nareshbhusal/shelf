@@ -25,6 +25,17 @@ export const sidebarOrder = () => {
   return seen;
 };
 
+// What a card shows: always, only while the pointer is over it, or never (progress also: until the book is finished).
+const SHOW = [['always', 'Always'], ['hover', 'On hover'], ['never', 'Never']];
+/** These used to be on/off switches; an old saved true/false becomes always/never. */
+const CARD_PARTS = ['showAuthor', 'showFormat', 'showPages', 'showTags', 'showProgress'];
+function cardPart(key, v) {
+  const item = SCHEMA.flatMap((g) => g.items).find((i) => i.key === key);
+  if (v === true) return 'always';
+  if (v === false) return 'never';
+  return item.options.some(([o]) => o === v) ? v : item.default;
+}
+
 // Adding a display option = adding one entry here, a CSS rule (or a line in applySettings), and you're done.
 // The settings dialog is generated from this table.
 const SCHEMA = [
@@ -39,11 +50,11 @@ const SCHEMA = [
       { key: 'coverRatio', label: 'Cover shape', type: 'select', options: [['2 / 3', 'Portrait 2:3'], ['3 / 4', 'Portrait 3:4'], ['1 / 1', 'Square']], default: '2 / 3' },
       { key: 'titleLines', label: 'Title lines', type: 'select', options: [['1', '1'], ['2', '2'], ['3', '3']], default: '2' },
       { key: 'groupComics', label: 'Multi-part series as one card (folders with several comics)', type: 'checkbox', default: true },
-      { key: 'showAuthor', label: 'Show author / folder', type: 'checkbox', default: true },
-      { key: 'showFormat', label: 'Show format badge', type: 'checkbox', default: true },
-      { key: 'showPages', label: 'Show page count', type: 'checkbox', default: true },
-      { key: 'showTags', label: 'Show tags on cards', type: 'checkbox', default: false },
-      { key: 'showProgress', label: 'Show reading progress', type: 'checkbox', default: true },
+      { key: 'showAuthor', label: 'Author / folder line', type: 'select', options: SHOW, default: 'always' },
+      { key: 'showFormat', label: 'Format badge', type: 'select', options: SHOW, default: 'always' },
+      { key: 'showPages', label: 'Page count', type: 'select', options: SHOW, default: 'always' },
+      { key: 'showTags', label: 'Tags on cards', type: 'select', options: SHOW, default: 'never' },
+      { key: 'showProgress', label: 'Reading progress bar', type: 'select', options: [['always', 'Always'], ['unfinished', 'Until finished'], ['hover', 'On hover'], ['never', 'Never']], default: 'always' },
     ],
   },
   {
@@ -178,7 +189,8 @@ export function applySettings() {
   root.dataset.theme = s.theme;
   root.dataset.coverFit = s.coverFit;
   root.dataset.readerBg = s.readerBg;
-  for (const k of ['showAuthor', 'showFormat', 'showPages', 'showTags', 'showProgress', 'showFolios']) root.dataset[k] = s[k] ? '1' : '0';
+  for (const k of CARD_PARTS) root.dataset[k] = s[k] = cardPart(k, s[k]);
+  root.dataset.showFolios = s.showFolios ? '1' : '0';
   const set = (k, v) => root.style.setProperty(k, v);
   set('--card-w', `${s.cardWidth}px`);
   set('--gap', `${s.cardGap}px`);
