@@ -6,6 +6,13 @@ import { renameFolder, trashBooks, trashFolder } from './trash.js';
 import { addToList, carryBooks, dragHasBooks, listAdder, readDrop } from './listadd.js';
 import { copyList, linkBar, openListInViewer, openSessionPicker, viewerItems, viewerName } from './sessions.js';
 import { bookName, onSettings, setSetting, settings, SORTS } from './settings.js';
+
+const newSeed = () => Math.floor(Math.random() * 2 ** 31) + 1;
+/** The order for Random lives in the settings, so it stays put through filters, opening a book and coming back, and reloads. */
+const shuffleSeed = () => {
+  if (!settings.shuffleSeed) setSetting('shuffleSeed', newSeed());
+  return settings.shuffleSeed;
+};
 import { booksChanged, events, refreshMeta, store, subscribe, tagById } from './store.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
 import { ago, dirSegments, fmtBytes, h, hashFor, hueOf, icon, initials, plural, progressFraction } from './util.js';
@@ -61,7 +68,6 @@ export function createLibraryView(route) {
   let listSort = 'manual'; // lists default to the order you arranged; this isn't a global setting
   let books = []; // the single books on the page (what can be selected)
   let entries = []; // what is drawn, in order: books, and series standing for several parts
-  let seed = Math.floor(Math.random() * 2 ** 31) + 1; // "Random" order: fresh for each visit, steady while you tag and edit
   let series = null; // the folder being viewed, when it is a series: {parts, next, state, done, fraction}
   let dirInfo = new Map(); // child folder path -> {kind: plain|group|single, ...} (files view only)
   let loaded = false;
@@ -97,7 +103,7 @@ export function createLibraryView(route) {
     p.set('sort', apiSort());
     p.set('order', sortOrder());
     if (isAdded) p.set('added', String(settings.addedDays));
-    if (apiSort() === 'random') p.set('seed', String(seed));
+    if (apiSort() === 'random') p.set('seed', String(shuffleSeed()));
     // Parts of a multi-part series stand in as one card, except in reading lists (which order single files) and
     // on "Recently added" (which is about each new file).
     if (!isList && !isAdded && settings.groupComics) p.set('series', '1');
@@ -195,9 +201,13 @@ export function createLibraryView(route) {
           value: sortKey(),
           onChange: (e) => {
             if (isList) {
+              if (e.target.value === 'random' && listSort !== 'random') setSetting('shuffleSeed', newSeed());
               listSort = e.target.value;
               load();
-            } else setSetting('sort', e.target.value);
+            } else {
+              if (e.target.value === 'random' && settings.sort !== 'random') setSetting('shuffleSeed', newSeed()); // choosing Random deals a new order
+              setSetting('sort', e.target.value);
+            }
           },
         },
         options.map(([v, l]) => h('option', { value: v }, l)),
@@ -205,7 +215,7 @@ export function createLibraryView(route) {
       controls.append(sel);
       if (sortKey() === 'random') {
         controls.append(
-          h('button', { class: 'icon-btn', title: 'Shuffle again', 'aria-label': 'Shuffle again', onClick: () => { seed = Math.floor(Math.random() * 2 ** 31) + 1; load(); } }, icon('shuffle', 16)),
+          h('button', { class: 'icon-btn', title: 'Shuffle again', 'aria-label': 'Shuffle again', onClick: () => { setSetting('shuffleSeed', newSeed()); load(); } }, icon('shuffle', 16)),
         );
       } else if (!(isList && listSort === 'manual')) {
         controls.append(

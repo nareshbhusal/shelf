@@ -62,8 +62,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   let partSince = Date.now(); // when the current part became the one being read
   let startIdx = 0;
   // Reading mode: a column you scroll (default), or one page at a time side by side (PDF and comics).
-  const modeKey = book.format === 'pdf' ? 'modePdf' : 'modeComic';
-  const wantMode = () => (!isEpub && settings[modeKey] === 'paged' ? 'paged' : 'scroll');
+  const modeKey = book.format === 'pdf' ? 'modePdf' : isEpub ? 'modeEpub' : 'modeComic';
+  const wantMode = () => (settings[modeKey] === 'paged' ? 'paged' : 'scroll');
   const wantRtl = () => book.format === 'cbz' && settings.rtlComic === 'rtl';
   // Two pages side by side (PDF and comics), in either mode; the first page can stay on its own, like a cover.
   const spreadKey = book.format === 'pdf' ? 'spreadPdf' : 'spreadComic';
@@ -105,8 +105,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     h('button', { class: 'icon-btn', title: 'Open this book in one of your programs, at this page', onClick: (e) => { const n = isEpub ? (estPages ? estPage() : 0) : parseInt(pageInput.value, 10); openWithMenu(e.currentTarget, { bookIds: [book.id], ...(n > 0 ? { page: n } : {}) }, 1); } }, icon('external', 18)),
     search ? search.button : null,
     h('button', { class: 'icon-btn', title: 'File info (I)', onClick: () => openFileInfo(book, ann) }, icon('info', 18)),
-    isEpub ? null : h('span', { class: 'bar-sep' }),
-    isEpub ? null : h('button', { class: 'icon-btn mode-btn', title: 'Reading mode (M)', onClick: () => toggleMode() }, icon('paged', 18)),
+    h('span', { class: 'bar-sep' }),
+    h('button', { class: 'icon-btn mode-btn', title: 'Reading mode (M)', onClick: () => toggleMode() }, icon('paged', 18)),
     isEpub ? null : h('button', { class: 'icon-btn spread-btn', title: 'Two pages side by side (S)', onClick: () => toggleSpread() }, icon('spread', 18)),
     book.format === 'cbz' ? h('button', { class: 'icon-btn dir-btn', title: 'Page order: left to right or right to left (D)', onClick: () => setSetting('rtlComic', settings.rtlComic === 'rtl' ? 'ltr' : 'rtl') }) : null,
     h('div', { class: 'reader-zoom' },
@@ -257,9 +257,17 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     if (sectionChanged || bookPercent() !== lastPct) setTitles();
     lastPct = bookPercent();
     progressLine.firstChild.style.width = `${bookFraction() * 100}%`;
+    paintEdges();
     queueSave();
   }
   let lastPct = -1;
+  /** An open book's page block is thicker on the side you have read: the two edges of a spread follow the progress. */
+  function paintEdges() {
+    const f = total > 1 && !isEpub ? clamp((currentPage - 1) / (total - 1), 0, 1) : 0;
+    const thick = clamp((total || 0) / 14, 0, 14); // a long book is a thick one
+    root.style.setProperty('--edge-read', `${(3 + thick * f).toFixed(2)}px`);
+    root.style.setProperty('--edge-rest', `${(3 + thick * (1 - f)).toFixed(2)}px`);
+  }
 
   function setCurrent(n, partId) {
     if (partId != null && parts && partId !== book.id) switchPart(partId);
@@ -345,7 +353,6 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     }
   }
   function toggleMode() {
-    if (isEpub) return;
     setSetting(modeKey, mode === 'paged' ? 'scroll' : 'paged');
   }
   function toggleSpread() {
@@ -363,8 +370,9 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     rtl = r;
     spread = sp;
     cover = cv;
+    if (isEpub && impl) impl.setMode?.(mode, rtl); // first: it notes where you are before the layout changes under it
     showMode();
-    if (!impl) return;
+    if (!impl || isEpub) return;
     settling = true; // the layout is about to move under us; don't read that as the reader scrolling
     impl.setMode?.(mode, rtl);
     updateCount();
@@ -474,8 +482,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     switch (e.key) {
       case 'Escape': if (!search?.consumeEscape() && !ann?.consumeEscape() && !impl?.consumeEscape?.()) location.hash = backHref; break;
       case '/': if (search) { search.open(); e.preventDefault(); } break;
-      case 'ArrowLeft': if (isEpub) impl?.step(-1); else if (mode === 'paged') { turn(rtl ? 1 : -1); e.preventDefault(); } break;
-      case 'ArrowRight': if (isEpub) impl?.step(1); else if (mode === 'paged') { turn(rtl ? -1 : 1); e.preventDefault(); } break;
+      case 'ArrowLeft': if (isEpub && mode !== 'paged') impl?.step(-1); else if (mode === 'paged') { turn(rtl ? 1 : -1); e.preventDefault(); } break;
+      case 'ArrowRight': if (isEpub && mode !== 'paged') impl?.step(1); else if (mode === 'paged') { turn(rtl ? -1 : 1); e.preventDefault(); } break;
       case 'm': case 'M': toggleMode(); break;
       case 'd': case 'D': if (dirBtn && (mode === 'paged' || spread)) setSetting('rtlComic', rtl ? 'ltr' : 'rtl'); break;
       case 's': case 'S': toggleSpread(); break;
@@ -490,8 +498,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
       case '+': case '=': zoom(1); break;
       case '-': case '_': zoom(-1); break;
       case '0': fitWidth(); break;
-      case 'Home': if (mode === 'paged') impl?.goTo(1, false); else scroller.scrollTo({ top: 0 }); e.preventDefault(); break;
-      case 'End': if (mode === 'paged') impl?.goTo(total || 1, false); else scroller.scrollTo({ top: scroller.scrollHeight }); e.preventDefault(); break;
+      case 'Home': if (isEpub && mode === 'paged') impl?.goTo(1); else if (mode === 'paged') impl?.goTo(1, false); else scroller.scrollTo({ top: 0 }); e.preventDefault(); break;
+      case 'End': if (isEpub && mode === 'paged') impl?.goToPos?.(Math.max(1, total), 1); else if (mode === 'paged') impl?.goTo(total || 1, false); else scroller.scrollTo({ top: scroller.scrollHeight }); e.preventDefault(); break;
       case 'f': case 'F':
         if (document.fullscreenElement) document.exitFullscreen();
         else document.documentElement.requestFullscreen?.().catch(() => {});
@@ -558,7 +566,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
 
   (async () => {
     try {
-      if (book.format === 'pdf') impl = await pdfImpl(book, scroller, pagesEl, makeTracker, (n) => (total = n, pageTotal.textContent = `/ ${n}`, setTitles()), ann, env);
+      if (book.format === 'pdf') impl = await pdfImpl(book, scroller, pagesEl, makeTracker, (n) => (total = n, pageTotal.textContent = `/ ${n}`, setTitles(), paintEdges()), ann, env);
       else if (book.format === 'cbz') {
         if (book.dir) {
           const s = await api.get(`/series?dir=${encodeURIComponent(book.dir)}`).catch(() => null);
@@ -580,7 +588,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
       }
       else if (isEpub) {
         impl = await epubImpl(book, {
-          root, scroller, pagesEl, bar, report: setPosition, onKey, onClick: onReadClick, onFind: () => search?.open(),
+          root, scroller, pagesEl, bar, report: setPosition, onKey, onClick: onReadClick, onFind: () => search?.open(), getMode: () => mode,
           setTotal: (n, chars, pages) => {
             total = n;
             weights = chars;
@@ -608,6 +616,8 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
         currentPage = resumeAt;
         currentPos = within;
         pageInput.value = String(resumeAt);
+        updateCount(); // the counter and the page block's edges say where you are from the start, not after the first scroll
+        paintEdges();
         impl.goTo(resumeAt, false, within);
         if (!explicit) toast(`Resumed at page ${resumeAt}`, 'quiet');
       } else {
@@ -659,6 +669,9 @@ function scrollToPage(scroller, el, smooth, pos = 0) {
  * Which pages are shown together. The first page stands alone (a cover) when `cover` is set, a page that is
  * already a spread (wider than tall) stands alone, and the rest pair up in order. Returns [[1], [2, 3], ...].
  */
+/** The number written under a row of pages: "12", or "12–13". */
+const folioOf = (g) => (g.length > 1 ? `${g[0]}–${g[g.length - 1]}` : String(g[0]));
+
 function groupSpreads(count, { cover, wide }) {
   const groups = [];
   let n = 1;
@@ -772,7 +785,7 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
     }
     const wide = (n) => m.imgs[n - 1].classList.contains('wide');
     m.groups = groupSpreads(m.imgs.length, { cover, wide });
-    return m.groups.map((g) => h('div', { class: `spread comic-spread${g.length === 1 ? ' lone' : ''}${g.length === 1 && wide(g[0]) ? ' wide' : ''}` }, ...g.map((n) => m.imgs[n - 1])));
+    return m.groups.map((g) => h('div', { class: `spread comic-spread${g.length === 1 ? ' lone' : ''}${g.length === 1 && wide(g[0]) ? ' wide' : ''}`, dataset: { folio: folioOf(g) } }, ...g.map((n) => m.imgs[n - 1])));
   }
   const nodesOf = (m) => [...(m.head ? [m.head] : []), ...m.body, ...(m.extra ?? [])];
   /** Lay a part out again (one page or two, a different pairing) where it already is in the document. */
@@ -1050,7 +1063,14 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
   }
   /** Puts the pages in the document: one after another, or in rows of two. */
   function place() {
-    pagesEl.replaceChildren(...(groups ? groups.map((g) => h('div', { class: `spread${g.length === 1 ? ' lone' : ''}${pages[g[0] - 1].wide ? ' wide' : ''}` }, ...g.map((n) => pages[n - 1].el))) : pages.map((p) => p.el)));
+    // Scrolling, each page (or row of two) is followed by its number on the desk; turning pages, they are slots in a strip.
+    pagesEl.replaceChildren(
+      ...(groups
+        ? groups.map((g) => h('div', { class: `spread${g.length === 1 ? ' lone' : ''}${pages[g[0] - 1].wide ? ' wide' : ''}`, dataset: { folio: folioOf(g) } }, ...g.map((n) => pages[n - 1].el)))
+        : paged
+          ? pages.map((p) => p.el)
+          : pages.flatMap((p) => [p.el, h('div', { class: 'folio', 'aria-hidden': 'true' }, String(p.n))])),
+    );
   }
 
   for (let n = 1; n <= count; n++) {

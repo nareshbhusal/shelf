@@ -72,11 +72,13 @@ const SCHEMA = [
     items: [
       { key: 'readerBg', label: 'Background', type: 'select', options: [['theme', 'Match theme'], ['black', 'Black'], ['dark', 'Dark'], ['gray', 'Gray'], ['paper', 'Paper']], default: 'theme' },
       { key: 'modePdf', label: 'PDF reading mode', type: 'select', options: [['scroll', 'Continuous scroll'], ['paged', 'One page at a time (horizontal)']], default: 'scroll' },
+      { key: 'modeEpub', label: 'Book (EPUB) reading mode', type: 'select', options: [['scroll', 'Continuous scroll'], ['paged', 'Pages, turned like a book']], default: 'scroll' },
       { key: 'modeComic', label: 'Comic reading mode', type: 'select', options: [['scroll', 'Continuous scroll'], ['paged', 'One page at a time (horizontal)']], default: 'scroll' },
       { key: 'rtlComic', label: 'Comic page order (one page at a time)', type: 'select', options: [['ltr', 'Left to right'], ['rtl', 'Right to left (manga)']], default: 'ltr' },
       { key: 'spreadPdf', label: 'PDF pages', type: 'select', options: [['single', 'One at a time'], ['double', 'Two side by side']], default: 'single' },
       { key: 'spreadComic', label: 'Comic pages', type: 'select', options: [['single', 'One at a time'], ['double', 'Two side by side']], default: 'single' },
       { key: 'spreadCover', label: 'Two side by side: first page on its own (cover)', type: 'checkbox', default: true },
+      { key: 'showFolios', label: 'Scrolling: page numbers between pages', type: 'checkbox', default: true },
       { key: 'pagedAnimation', label: 'Animate page turns (one page at a time)', type: 'checkbox', default: true },
       { key: 'pdfWidth', label: 'PDF page width', type: 'range', min: 400, max: 2000, step: 50, unit: 'px', default: 900 },
       { key: 'comicWidth', label: 'Comic page width', type: 'range', min: 300, max: 1800, step: 50, unit: 'px', default: 900 },
@@ -92,6 +94,7 @@ const SCHEMA = [
 const KEY = 'shelf.settings.v1';
 export const settings = {};
 for (const g of SCHEMA) for (const it of g.items) settings[it.key] = it.default;
+settings.shuffleSeed = 0; // the order "Random" uses; kept (and synced) so browsing around doesn't reshuffle, replaced only by Shuffle
 try {
   Object.assign(settings, JSON.parse(localStorage.getItem(KEY) || '{}'));
 } catch {
@@ -175,7 +178,7 @@ export function applySettings() {
   root.dataset.theme = s.theme;
   root.dataset.coverFit = s.coverFit;
   root.dataset.readerBg = s.readerBg;
-  for (const k of ['showAuthor', 'showFormat', 'showPages', 'showTags', 'showProgress']) root.dataset[k] = s[k] ? '1' : '0';
+  for (const k of ['showAuthor', 'showFormat', 'showPages', 'showTags', 'showProgress', 'showFolios']) root.dataset[k] = s[k] ? '1' : '0';
   const set = (k, v) => root.style.setProperty(k, v);
   set('--card-w', `${s.cardWidth}px`);
   set('--gap', `${s.cardGap}px`);

@@ -33,7 +33,7 @@ function resolveHref(from, href) {
   return { path: dec(u.pathname.slice(1)), frag: dec(u.hash.slice(1)) };
 }
 
-export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, report, onKey, onClick, onFind }) {
+export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, report, onKey, onClick, onFind, getMode }) {
   let meta;
   try {
     meta = await api.get(`/books/${book.id}/epub`);
@@ -50,12 +50,59 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
   let restoring = true; // no position reports until the saved position has been applied
   let colW = 720;
 
+  // Two layouts. Scrolling: the sections are stacked and `sec.h` is a height. Flipping ("paged"): the sections are side by
+  // side, each laid out in columns one screen wide, and `sec.h` is its width, a whole number of screens, one per page;
+  // the book is then one strip that snaps screen by screen. Everything below is written for either, along `off()`.
+  let paged = getMode?.() === 'paged';
+  const geo = { vw: 800, vh: 600, W: 720, H: 500, top: 76, bottom: 58, pad: 26 };
+  function measureGeo() {
+    geo.vw = scroller.clientWidth || 800;
+    geo.vh = scroller.clientHeight || 600;
+    geo.W = Math.max(220, Math.min(colW, geo.vw - 2 * (geo.pad + 10)));
+    geo.H = Math.max(200, geo.vh - geo.top - geo.bottom);
+    const st = pagesEl.style;
+    st.setProperty('--vw', `${geo.vw}px`);
+    st.setProperty('--colw', `${geo.W}px`);
+    st.setProperty('--eh', `${geo.H}px`);
+    st.setProperty('--et', `${geo.top}px`);
+    st.setProperty('--eb', `${geo.bottom}px`);
+    st.setProperty('--pad', `${geo.pad}px`);
+  }
+  measureGeo();
+  const pagesIn = (sec) => Math.max(1, Math.round(sec.h / geo.vw));
+  const estimateExtent = (it) => (paged ? Math.max(1, Math.round(estimate(it) / geo.H)) * geo.vw : estimate(it));
+  const off = () => (paged ? scroller.scrollLeft : scroller.scrollTop);
+  const setOff = (v) => {
+    if (paged) scroller.scrollLeft = v;
+    else scroller.scrollTop = v;
+  };
+
   const secs = meta.spine.map((it, i) => {
     const wrap = h('section', { class: `epub-sec${it.kind === 'image' ? ' img' : ''}`, dataset: { page: i + 1 } });
-    const sec = { i, it, wrap, frame: null, img: null, h: estimate(it), tried: 0, ready: null, resolve: null };
-    wrap.style.height = `${sec.h}px`;
+    const sec = { i, it, wrap, frame: null, img: null, h: estimateExtent(it), k: 1, tried: 0, ready: null, resolve: null };
     return sec;
   });
+  /** The section's box takes its extent along the reading direction (and, flipping, one sheet per page). */
+  function applyExtent(sec) {
+    sec.wrap.style.height = paged ? '' : `${sec.h}px`;
+    sec.wrap.style.width = paged ? `${sec.h}px` : '';
+    paintSheets(sec);
+  }
+  function paintSheets(sec) {
+    const have = sec.wrap.querySelectorAll(':scope > .epub-snap');
+    if (!paged) {
+      have.forEach((e) => e.remove());
+      return;
+    }
+    const k = pagesIn(sec);
+    if (have.length === k && sec.sheetVw === geo.vw) return;
+    have.forEach((e) => e.remove());
+    sec.sheetVw = geo.vw;
+    const frag = document.createDocumentFragment();
+    for (let n = 0; n < k; n++) frag.append(h('div', { class: 'epub-snap', style: { left: `${n * geo.vw}px`, width: `${geo.vw}px` } }, h('div', { class: 'epub-sheet' })));
+    sec.wrap.prepend(frag);
+  }
+  secs.forEach(applyExtent);
   pagesEl.classList.add('epub');
   pagesEl.append(...secs.map((s) => s.wrap));
 
@@ -63,7 +110,8 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
   let tops = [];
   function layout() {
     const sr = scroller.getBoundingClientRect();
-    let y = secs[0].wrap.getBoundingClientRect().top - sr.top + scroller.scrollTop;
+    const r0 = secs[0].wrap.getBoundingClientRect();
+    let y = paged ? r0.left - sr.left + scroller.scrollLeft : r0.top - sr.top + scroller.scrollTop;
     tops = secs.map((s) => {
       const t = y;
       y += s.h;
@@ -79,31 +127,39 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
     }
     return lo;
   };
+  /** Where the reader is: a section, and how far into it (flipping: the start of the page you are on). */
   const here = () => {
     layout();
-    const i = sectionAt(scroller.scrollTop + 1);
-    return { i, pos: clamp((scroller.scrollTop - tops[i]) / secs[i].h, 0, 1) };
+    const i = sectionAt(off() + 1);
+    if (paged) return { i, pos: clamp(Math.round((off() - tops[i]) / geo.vw) / pagesIn(secs[i]), 0, 1) };
+    return { i, pos: clamp((off() - tops[i]) / secs[i].h, 0, 1) };
   };
-  const scrollToPos = (i, pos) => {
+  /** The scroll offset that shows section i at `pos`, or at an element of it (a link target, a search hit). */
+  function offsetFor(i, { pos = 0, el = null } = {}) {
     layout();
-    scroller.scrollTop = tops[i] + pos * secs[i].h;
-  };
+    if (!paged) return tops[i] + (el ? el.getBoundingClientRect().top - 16 : pos * secs[i].h);
+    const k = pagesIn(secs[i]);
+    const pg = el ? Math.floor(Math.max(0, el.getBoundingClientRect().left) / geo.vw) : Math.floor(pos * k + 1e-6);
+    return tops[i] + clamp(pg, 0, k - 1) * geo.vw;
+  }
+  const scrollToPos = (i, pos) => setOff(Math.max(0, offsetFor(i, { pos })));
 
   /** A section changed height. If it lies wholly above the viewport, shift the scroll to keep the text still. */
   function setH(sec, hh) {
-    hh = Math.max(40, Math.ceil(hh));
+    hh = paged ? Math.max(1, Math.round(hh / geo.vw)) * geo.vw : Math.max(40, Math.ceil(hh));
     if (hh === sec.h) return;
     const sr = scroller.getBoundingClientRect();
-    const above = sec.wrap.getBoundingClientRect().bottom - sr.top <= 0;
+    const r = sec.wrap.getBoundingClientRect();
+    const above = paged ? r.right - sr.left <= 0 : r.bottom - sr.top <= 0;
     const delta = hh - sec.h;
     sec.h = hh;
-    sec.wrap.style.height = `${hh}px`;
-    if (above) scroller.scrollTop += delta;
+    applyExtent(sec);
+    if (above) setOff(off() + delta);
     schedule();
   }
 
   // ---------------------------------------------------------------- styling of the book's pages
-  function css() {
+  function css(sec = null) {
     const ds = document.documentElement.dataset;
     const paper = ds.readerBg === 'paper' || (ds.readerBg === 'theme' && (ds.theme === 'light' || ds.theme === 'sepia'));
     const fg = paper ? '#26231d' : '#d8dbe2';
@@ -112,7 +168,7 @@ export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, r
     const fam = settings.epubFont === 'sans' ? SANS : settings.epubFont === 'serif' ? SERIF : '';
     return `${FACES}
 html { height: auto !important; min-height: 0 !important; overflow: hidden !important; background: transparent !important; color-scheme: ${paper ? 'light' : 'dark'}; }
-body { display: flow-root !important; box-sizing: border-box !important; width: auto !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: 32px 28px 44px !important;
+body { display: flow-root !important; box-sizing: border-box !important; width: auto !important; max-width: none !important; min-height: 0 !important; margin: 0 !important; padding: ${paged ? '0' : '32px 28px 44px'} !important;
   background: transparent !important; color: ${fg} !important; font-size: ${settings.epubFontSize}px !important; line-height: ${settings.epubLine} !important; overflow-wrap: break-word; position: static !important; }
 body * { color: inherit !important; background-color: transparent !important; ${fam ? `font-family: ${fam} !important;` : ''} }
 ${fam ? `body { font-kerning: normal; font-optical-sizing: auto; ${settings.epubFont === 'serif' ? 'font-feature-settings: "onum", "kern";' : ''} }
@@ -123,20 +179,26 @@ ${fam ? `pre, pre *, code, kbd, samp, tt { font-family: ui-monospace, Menlo, Con
 a, a * { color: ${link} !important; }
 img, svg, video, canvas, table { max-width: 100% !important; }
 img, video { height: auto !important; }
+${paged ? `html { overflow: hidden !important; width: ${(sec?.k ?? 1) * geo.vw - (geo.vw - geo.W)}px !important; height: ${geo.H}px !important; }
+body { width: ${(sec?.k ?? 1) * geo.vw - (geo.vw - geo.W)}px !important; height: ${geo.H}px !important; padding: 0 !important; margin: 0 !important; overflow: visible !important;
+  column-width: ${geo.W}px !important; column-gap: ${geo.vw - geo.W}px !important; column-fill: auto !important; display: block !important; }
+img, svg, video, canvas { max-height: ${geo.H}px !important; width: auto; object-fit: contain; break-inside: avoid; }
+h1, h2, h3, h4 { break-after: avoid; }
+p, li, blockquote { orphans: 2; widows: 2; }` : ''}
 pre { white-space: pre-wrap !important; }
 ::selection { background: ${accent}66; }
 html body mark.srch { background-color: rgba(255, 214, 64, .55) !important; color: inherit !important; border-radius: 2px; }
 html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; outline: 2px solid rgba(255, 140, 0, .9); }
 `;
   }
-  const styleDoc = (doc) => {
+  const styleDoc = (doc, sec = null) => {
     let st = doc.getElementById('shelf-epub-style');
     if (!st) {
       st = doc.createElement('style');
       st.id = 'shelf-epub-style';
       (doc.head ?? doc.documentElement).append(st);
     }
-    st.textContent = css();
+    st.textContent = css(sec);
   };
 
   // ---------------------------------------------------------------- loading and unloading sections
@@ -146,7 +208,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
     if (sec.it.kind === 'image') {
       const img = h('img', { class: 'epub-img', alt: '', src: fileUrl(sec.it.path) });
       const fit = () => {
-        setH(sec, img.getBoundingClientRect().height + 24);
+        setH(sec, paged ? geo.vw : img.getBoundingClientRect().height + 24); // flipping, an image is a page of its own
         sec.resolve();
       };
       img.addEventListener('load', fit);
@@ -175,9 +237,27 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
   function measure(sec) {
     const doc = sec.frame?.contentDocument;
     if (!doc?.documentElement) return;
+    const se = doc.scrollingElement;
+    if (paged) {
+      // Count the columns the text really fills (the frame may be wider than it needs), then make the frame exactly that wide.
+      let right = 0;
+      try {
+        const rg = doc.createRange();
+        rg.selectNodeContents(doc.body);
+        right = rg.getBoundingClientRect().right;
+      } catch { /* an empty body */ }
+      const k = Math.max(1, Math.ceil((right - geo.W - 2) / geo.vw) + 1);
+      if (k !== sec.k) {
+        sec.k = k;
+        styleDoc(doc, sec);
+      }
+      sec.frame.style.width = `${k * geo.vw - (geo.vw - geo.W)}px`;
+      setH(sec, k * geo.vw);
+      if (se && (se.scrollTop || se.scrollLeft)) { se.scrollTop = 0; se.scrollLeft = 0; }
+      return;
+    }
     setH(sec, doc.documentElement.getBoundingClientRect().height);
     // The frame is exactly as tall as its text; if focus ever scrolled it internally, put it back.
-    const se = doc.scrollingElement;
     if (se && se.scrollTop) se.scrollTop = 0;
   }
 
@@ -191,10 +271,11 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       f.src = fileUrl(sec.it.path, '&html=1');
       return;
     }
-    styleDoc(doc);
+    styleDoc(doc, sec);
     markSec(sec);
     doc.addEventListener('click', (e) => frameClick(sec, e));
     doc.addEventListener('keydown', frameKey);
+    doc.addEventListener('wheel', onWheel, { passive: false });
     doc.addEventListener('load', () => measure(sec), true); // images finishing
     try {
       const ro = new f.contentWindow.ResizeObserver(() => measure(sec));
@@ -215,6 +296,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       return onFind();
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (paged) return onKey(e); // the shell turns the pages
     const page = scroller.clientHeight * 0.9;
     const by = (top) => { e.preventDefault(); scroller.scrollBy({ top }); };
     if (e.key === ' ') return by(e.shiftKey ? -page : page);
@@ -233,7 +315,8 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       if (href) openLink(sec, href);
       return;
     }
-    onClick({ detail: e.detail, target: scroller });
+    const fr = sec.frame?.getBoundingClientRect(); // the click's place is the frame's own; the shell wants the screen's
+    onClick({ detail: e.detail, target: scroller, clientX: (fr?.left ?? 0) + e.clientX, clientY: (fr?.top ?? 0) + e.clientY });
   }
 
   const backStack = [];
@@ -284,6 +367,10 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
   let userStamp = 0;
   let pendingIdx = -1; // target of a jump that hasn't settled yet (so quick repeated key presses keep counting)
   for (const ev of ['wheel', 'touchstart', 'pointerdown']) scroller.addEventListener(ev, () => (userStamp++, (pendingIdx = -1)), { passive: true });
+  const targetIn = (idx, frag) => {
+    const doc = secs[idx].frame?.contentDocument;
+    return frag && doc ? doc.getElementById(frag) ?? doc.getElementsByName?.(frag)?.[0] ?? null : null;
+  };
   async function jumpTo(idx, frag = '', remember = false) {
     idx = clamp(idx, 0, N - 1);
     if (remember) pushBack();
@@ -291,24 +378,14 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
     const stamp = userStamp;
     pendingIdx = idx;
     layout();
-    scroller.scrollTop = tops[idx]; // land near it right away; heights settle once it loads
+    setOff(tops[idx]); // land near it right away; extents settle once it loads
     await mount(secs[idx]);
     if (mine !== jumpSeq || dead) return;
-    layout();
-    let y = tops[idx];
-    if (frag) {
-      const doc = secs[idx].frame?.contentDocument;
-      const el = doc && (doc.getElementById(frag) ?? doc.getElementsByName?.(frag)?.[0]);
-      if (el) y += el.getBoundingClientRect().top - 16;
-    }
-    scroller.scrollTop = y;
+    setOff(Math.max(0, offsetFor(idx, { el: targetIn(idx, frag) })));
     setTimeout(() => {
       if (dead || mine !== jumpSeq || stamp !== userStamp) return;
       pendingIdx = -1;
-      layout();
-      const doc = secs[idx].frame?.contentDocument;
-      const el = frag && doc && (doc.getElementById(frag) ?? doc.getElementsByName?.(frag)?.[0]);
-      scroller.scrollTop = tops[idx] + (el ? el.getBoundingClientRect().top - 16 : 0);
+      setOff(Math.max(0, offsetFor(idx, { el: targetIn(idx, frag) })));
     }, 350);
   }
 
@@ -324,8 +401,8 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
   function update() {
     if (dead) return;
     layout();
-    const t = scroller.scrollTop;
-    const vh = scroller.clientHeight || 800;
+    const t = off();
+    const vh = paged ? geo.vw : scroller.clientHeight || 800; // how far is "near": a screen, along the reading direction
     for (const s of secs) {
       const top = tops[s.i], bot = top + s.h;
       if (bot > t - vh * 1.5 && top < t + vh * 2.5) mount(s);
@@ -333,12 +410,61 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
     }
     if (restoring) return;
     const i = sectionAt(t + 1);
-    const pos = clamp((t - tops[i]) / secs[i].h, 0, 1);
+    const pos = paged ? Math.min(1, Math.round((t - tops[i]) / geo.vw) / pagesIn(secs[i])) : clamp((t - tops[i]) / secs[i].h, 0, 1);
     report(i + 1, pos);
     markToc(i);
   }
   scroller.addEventListener('scroll', schedule, { passive: true });
   window.addEventListener('resize', schedule);
+
+  // ---------------------------------------------------------------- flipping
+  let heading = null; // where a page turn that is still animating is heading, so quick key presses count from there
+  function turnPage(dir) {
+    restoring = false;
+    const now = Math.round(scroller.scrollLeft / geo.vw);
+    const last = Math.max(0, Math.round(scroller.scrollWidth / geo.vw) - 1);
+    const to = clamp((heading && Date.now() - heading.t < 700 ? heading.i : now) + dir, 0, last);
+    heading = { i: to, t: Date.now() };
+    pendingIdx = -1;
+    userStamp++; // a turn cancels the settling of an earlier jump
+    scroller.scrollTo({ left: to * geo.vw, behavior: settings.pagedAnimation !== false ? 'smooth' : 'instant' });
+  }
+  let wheelAt = 0;
+  function onWheel(e) {
+    if (!paged || e.ctrlKey || Math.abs(e.deltaY) < Math.abs(e.deltaX) || Math.abs(e.deltaY) < 4) return; // sideways wheels and swipes already scroll the strip
+    e.preventDefault();
+    if (Date.now() - wheelAt < 340) return; // one turn per flick, not one per tick of its momentum
+    wheelAt = Date.now();
+    turnPage(e.deltaY > 0 ? 1 : -1);
+  }
+  scroller.addEventListener('wheel', onWheel, { passive: false });
+  /** The screen changed size (a window resize, the contents panel opening): lay the columns out again, keeping the place. */
+  let relayoutTimer = 0;
+  function relayoutPaged(keep = true) {
+    clearTimeout(relayoutTimer);
+    relayoutTimer = setTimeout(() => {
+      if (dead || !paged) return;
+      const p = keep && !restoring ? here() : null;
+      measureGeo();
+      for (const s of secs) {
+        if (s.frame?.contentDocument?.documentElement) {
+          s.k = 1;
+          styleDoc(s.frame.contentDocument, s);
+          measure(s);
+        } else if (!s.frame && !s.img) {
+          s.h = estimateExtent(s.it);
+          applyExtent(s);
+        } else paintSheets(s);
+      }
+      if (p) {
+        scrollToPos(p.i, p.pos);
+        setTimeout(() => !dead && paged && scrollToPos(p.i, p.pos), 250);
+      }
+      schedule();
+    }, 120);
+  }
+  const ro = new ResizeObserver(() => paged && relayoutPaged());
+  ro.observe(scroller);
 
   // ---------------------------------------------------------------- table of contents
   const flat = [];
@@ -431,7 +557,8 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
     clearTimeout(restyleTimer);
     restyleTimer = setTimeout(() => {
       if (dead) return;
-      for (const s of secs) if (s.frame?.contentDocument?.documentElement) { styleDoc(s.frame.contentDocument); measure(s); }
+      if (paged) measureGeo();
+      for (const s of secs) if (s.frame?.contentDocument?.documentElement) { if (paged) s.k = 1; styleDoc(s.frame.contentDocument, s); measure(s); }
       if (p) setTimeout(() => !dead && scrollToPos(p.i, p.pos), 200);
     }, 60);
   }
@@ -484,13 +611,14 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       const stamp = userStamp;
       pendingIdx = unit;
       layout();
-      scroller.scrollTop = tops[unit];
+      setOff(tops[unit]);
       await mount(secs[unit]);
       if (mine !== jumpSeq || dead) return;
       const settle = () => {
         const mk = markSec(secs[unit]);
         layout();
-        scroller.scrollTop = Math.max(0, tops[unit] + (mk ? mk.getBoundingClientRect().top - scroller.clientHeight * 0.3 : 0));
+        if (paged) setOff(Math.max(0, offsetFor(unit, { el: mk }))); // the page the hit is on
+        else scroller.scrollTop = Math.max(0, tops[unit] + (mk ? mk.getBoundingClientRect().top - scroller.clientHeight * 0.3 : 0));
       };
       settle();
       setTimeout(() => {
@@ -520,7 +648,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       const stamp = userStamp;
       pendingIdx = i;
       layout();
-      scroller.scrollTop = tops[i];
+      setOff(tops[i]);
       await mount(secs[i]);
       if (mine !== jumpSeq || dead) return;
       scrollToPos(i, clamp(pos ?? 0, 0, 1));
@@ -536,7 +664,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       const stamp = userStamp;
       const mine = ++jumpSeq;
       layout();
-      scroller.scrollTop = tops[i];
+      setOff(tops[i]);
       await mount(secs[i]);
       if (mine !== jumpSeq || dead) return restoring = false;
       scrollToPos(i, clamp(pos ?? 0, 0, 1));
@@ -549,10 +677,40 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
     },
     /** Section forward/back (arrow keys). Back first returns to the top of the current section. */
     step(dir) {
+      if (paged) return turnPage(dir);
       const { i, pos } = pendingIdx >= 0 ? { i: pendingIdx, pos: 0 } : here();
       restoring = false;
       const target = dir < 0 && pos > 0.02 ? i : i + dir;
       if (target >= 0 && target < N) jumpTo(target, '', false);
+    },
+    /** Scrolling <-> flipping, staying on the same sentence. */
+    setMode(m) {
+      const want = m === 'paged';
+      if (want === paged) return;
+      const p = restoring ? null : here(); // before anything moves
+      paged = want;
+      measureGeo();
+      for (const s of secs) {
+        s.k = 1;
+        s.sheetVw = 0;
+        s.h = estimateExtent(s.it);
+        if (s.frame) s.frame.style.width = '';
+        applyExtent(s);
+      }
+      for (const s of secs) if (s.frame?.contentDocument?.documentElement) { styleDoc(s.frame.contentDocument, s); measure(s); }
+      if (!p) return schedule();
+      // The shell flips its own layout right after this returns, which resets the scroll; so put the place back once it has,
+      // and don't report positions in the meantime.
+      restoring = true;
+      const mine = ++jumpSeq;
+      const back = () => !dead && paged === want && mine === jumpSeq && scrollToPos(p.i, p.pos);
+      for (const t of [30, 150, 400]) setTimeout(back, t);
+      setTimeout(() => {
+        if (dead || mine !== jumpSeq) return;
+        back();
+        restoring = false;
+        schedule();
+      }, 700);
     },
     fontStep: (dir) => step('epubFontSize', dir, 12, 36, 1, 0),
     toggleToc,
@@ -575,6 +733,9 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       clearTimeout(backTimer);
       scroller.removeEventListener('scroll', schedule);
       window.removeEventListener('resize', schedule);
+      scroller.removeEventListener('wheel', onWheel);
+      ro.disconnect();
+      clearTimeout(relayoutTimer);
       document.removeEventListener('mousedown', outside);
       unsub();
       for (const s of secs) {

@@ -218,8 +218,9 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   always show the single files, since they are ordered file by file, and so does "Recently added", which is
   about each new file. Settings > Library > "Multi-part series
   as one card" turns it off everywhere.
-- **Sort** includes **Random**: a shuffle that stays put while you tag and edit and is new on each visit; the
-  shuffle button next to the sort menu draws another. A series is shuffled as one.
+- **Sort** includes **Random**: a shuffle that stays put: filters, opening a book and coming back, reloads and other
+  devices all see the same order (its seed is a saved setting). Choosing Random again, or the shuffle button next to
+  the sort menu, deals a new one. A series is shuffled as one.
 - **Select** books (checkbox on hover, shift-click for ranges, Ctrl+A) then **Tag**, **Add to list**,
   **Open with** or **Rename…**. Type a new name to create a tag or list on the spot.
 - **Rename** (card menu, Details, the selection bar, or "Rename parts…" on a series page). This is the
@@ -406,7 +407,8 @@ cropped PDF pages are laid out correctly, including their selectable text.
 
 ### The EPUB reader
 
-Continuous scroll through the whole book, like the other readers. Each section (chapter file) is shown in
+Continuous scroll through the whole book by default, or one page at a time (**M**, the mode button, or Settings >
+"Book (EPUB) reading mode"). Each section (chapter file) is shown in
 its own sandboxed frame and loaded only when you get near it, so large books open quickly.
 
 - Contents (EPUB3 nav or EPUB2 NCX) in a side panel (`t`); internal links, footnotes and cross-references
@@ -423,7 +425,11 @@ its own sandboxed frame and loaded only when you get near it, so large books ope
 - **Scripts in books never run**, nothing loads from outside the book, and the frames can't submit forms or
   open windows (sandbox plus a strict Content-Security-Policy on every file served from inside an EPUB).
 - Sloppy XHTML that isn't well-formed XML is shown through the forgiving HTML parser instead.
-- Not there yet: highlights/notes in EPUBs, paged and two-page modes, fixed-layout books (shown as
+- **Flip mode**: the text is set in columns and each screen is one sheet. Turn with ← →, Space / Shift+Space, PageUp/Down,
+  the mouse wheel (one turn per flick), a swipe, or a click on the outer thirds of the screen (the middle third shows
+  or hides the bar); Home/End go to the ends. Switching modes, resizing the window or changing the text size keeps
+  your place. Left to right only; the page numbers are the same estimate as in scroll mode.
+- Not there yet: highlights/notes in EPUBs, two-page mode, right-to-left flip, fixed-layout books (shown as
   flowing text), DRM-protected books (can't be read at all).
 
 ## Sessions (docsessions)
@@ -525,3 +531,7 @@ In the reader the top bar follows the theme and groups its tools; the page sits 
 (Settings > Reader background still overrides it). Two pages side by side are drawn as an open book: a shadow in
 the gutter and the edge of the page block on the outside. EPUBs are set in Literata (or Atkinson Hyperlegible
 Next with the Sans option); "The book's own" leaves the book's fonts alone.
+
+In scroll mode PDFs get a small page number on the desk beside each page (Settings > "Scrolling: page numbers between pages" turns
+them off) and extra space between rows and spreads, so two-page spreads stacked down the screen read as separate
+openings. The page block's edges grow on the side you have read as you go through the book.

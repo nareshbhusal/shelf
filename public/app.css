@@ -492,6 +492,18 @@ html[data-reader-bg="paper"] .reader { --rfg: #2a2620; --rmuted: #6b6558; }
 .reader.paged .reader-zoom { display: none; }
 .reader.paged .pdf-page, .reader.paged .comic-page { cursor: pointer; }
 .reader.paged.placing .pdf-page, .reader.paged.pen-mode .pdf-page { cursor: crosshair; }
+/* books (EPUB), turned like pages: each spine item is a run of screens, every screen a sheet with the text laid out in columns on it */
+.reader.paged .reader-pages.epub { display: flex; flex-direction: row; align-items: stretch; width: max-content; min-width: 100%; max-width: none; height: 100%; margin: 0; }
+.reader.paged .epub-sec { flex: none; height: 100%; border-top: 0; overflow: clip; }
+.reader.paged .epub-sec.img { display: block; }
+.reader.paged .epub-frame { position: absolute; left: calc((var(--vw) - var(--colw)) / 2); top: var(--et); height: var(--eh); width: auto; }
+.reader.paged .epub-img { position: absolute; left: calc((var(--vw) - var(--colw)) / 2); top: var(--et); width: var(--colw); height: var(--eh); object-fit: contain; }
+.epub-snap { position: absolute; top: 0; bottom: 0; scroll-snap-align: start; scroll-snap-stop: always; pointer-events: none; }
+.epub-sheet { position: absolute; left: 50%; width: calc(var(--colw) + 2 * var(--pad)); transform: translateX(-50%); top: calc(var(--et) - var(--pad)); bottom: calc(var(--eb) - var(--pad)); border-radius: 3px;
+  background: color-mix(in srgb, var(--rbg, var(--desk)) 90%, var(--rfg)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--rfg) 8%, transparent), 0 10px 26px -12px rgba(0, 0, 0, .55); }
+html[data-reader-bg="paper"] .epub-sheet, html[data-reader-bg="theme"][data-theme="light"] .epub-sheet, html[data-reader-bg="theme"][data-theme="sepia"] .epub-sheet { background-color: color-mix(in srgb, var(--rbg, var(--desk)) 35%, #fffdf8); box-shadow: 0 0 0 1px rgba(0, 0, 0, .07), 0 10px 26px -12px rgba(0, 0, 0, .35); }
+.epub-snap:nth-child(odd) .epub-sheet { background-image: linear-gradient(to right, rgba(0, 0, 0, .08), transparent 6%); }
+@media (max-width: 700px) { .epub-sheet { width: 100%; border-radius: 0; box-shadow: none; background: none; background-image: none !important; } }
 /* ---------- two pages side by side ---------- */
 .spread { display: flex; justify-content: center; align-items: flex-start; flex: none; margin: 0 auto var(--page-gap, 12px); max-width: 100%; }
 .spread > .pdf-page { margin: 0; }
@@ -685,11 +697,31 @@ a.stitle:hover { color: var(--accent); text-decoration: none; }
 @media (prefers-reduced-motion: reduce) { .cover-wrap { transition: none; } .card:hover .cover-wrap { transform: none; } }
 
 /* ---------- two pages: a book lying open ----------
-   A shadow gathers in the gutter from both sides, and the outer edges show the thickness of the page block. */
+   A shadow gathers in the gutter from both sides. The outer edges show the page block, and its two sides follow
+   how far you have read (--edge-read / --edge-rest, set by the reader): the pages behind you pile up on one side. */
+.reader { --edge-read: 4px; --edge-rest: 8px; --sx: -1; }
+.reader.double.rtl { --sx: 1; }
 .spread { position: relative; }
-.spread:not(.lone)::after { content: ""; position: absolute; z-index: 3; top: 0; bottom: 0; left: 50%; width: clamp(22px, 7%, 70px); transform: translateX(-50%); pointer-events: none; mix-blend-mode: multiply;
-  background: linear-gradient(90deg, transparent 0, rgba(0,0,0,.07) 22%, rgba(0,0,0,.17) 42%, rgba(0,0,0,.3) 50%, rgba(0,0,0,.17) 58%, rgba(0,0,0,.07) 78%, transparent 100%); }
-.spread:not(.lone) > :first-child { box-shadow: -1px 0 0 #d4d2ca, -2px 1px 0 #e6e4dd, -3px 2px 0 #c3c0b7, -4px 3px 0 #dad8d0, 0 16px 30px -14px rgba(0,0,0,.6); }
-.spread:not(.lone) > :last-child { box-shadow: 1px 0 0 #d4d2ca, 2px 1px 0 #e6e4dd, 3px 2px 0 #c3c0b7, 4px 3px 0 #dad8d0, 0 16px 30px -14px rgba(0,0,0,.6); }
-.reader.double.rtl .spread:not(.lone) > :first-child { box-shadow: 1px 0 0 #d4d2ca, 2px 1px 0 #e6e4dd, 3px 2px 0 #c3c0b7, 4px 3px 0 #dad8d0, 0 16px 30px -14px rgba(0,0,0,.6); }
-.reader.double.rtl .spread:not(.lone) > :last-child { box-shadow: -1px 0 0 #d4d2ca, -2px 1px 0 #e6e4dd, -3px 2px 0 #c3c0b7, -4px 3px 0 #dad8d0, 0 16px 30px -14px rgba(0,0,0,.6); }
+.spread:not(.lone)::after { content: ""; position: absolute; z-index: 3; top: 0; bottom: 0; left: 50%; width: clamp(20px, 4.4%, 46px); transform: translateX(-50%); pointer-events: none; mix-blend-mode: multiply;
+  /* a hairline crease, and a fall-off on either side that eases out instead of banding (the paper bends away from the fold) */
+  background:
+    linear-gradient(90deg, transparent calc(50% - .5px), rgba(0,0,0,.2) calc(50% - .5px), rgba(0,0,0,.2) calc(50% + .5px), transparent calc(50% + .5px)),
+    linear-gradient(90deg, transparent 0, rgba(0,0,0,.012) 10%, rgba(0,0,0,.035) 22%, rgba(0,0,0,.07) 34%, rgba(0,0,0,.115) 43%, rgba(0,0,0,.15) 50%, rgba(0,0,0,.115) 57%, rgba(0,0,0,.07) 66%, rgba(0,0,0,.035) 78%, rgba(0,0,0,.012) 90%, transparent 100%); }
+.spread:not(.lone) > :first-child { box-shadow: var(--block-read), 0 16px 30px -14px rgba(0,0,0,.6); }
+.spread:not(.lone) > :last-child { box-shadow: var(--block-rest), 0 16px 30px -14px rgba(0,0,0,.6); }
+.reader {
+  --block-read: calc(var(--sx) * var(--edge-read) * .17) calc(var(--edge-read) * .1) 0 0 #d2d0c7, calc(var(--sx) * var(--edge-read) * .34) calc(var(--edge-read) * .2) 0 0 #efede6, calc(var(--sx) * var(--edge-read) * .5) calc(var(--edge-read) * .3) 0 0 #cfcdc4, calc(var(--sx) * var(--edge-read) * .67) calc(var(--edge-read) * .4) 0 0 #ece9e2, calc(var(--sx) * var(--edge-read) * .84) calc(var(--edge-read) * .5) 0 0 #c9c6bd, calc(var(--sx) * var(--edge-read)) calc(var(--edge-read) * .6) 0 0 #e4e1d9;
+  --block-rest: calc(var(--sx) * var(--edge-rest) * -.17) calc(var(--edge-rest) * .1) 0 0 #d2d0c7, calc(var(--sx) * var(--edge-rest) * -.34) calc(var(--edge-rest) * .2) 0 0 #efede6, calc(var(--sx) * var(--edge-rest) * -.5) calc(var(--edge-rest) * .3) 0 0 #cfcdc4, calc(var(--sx) * var(--edge-rest) * -.67) calc(var(--edge-rest) * .4) 0 0 #ece9e2, calc(var(--sx) * var(--edge-rest) * -.84) calc(var(--edge-rest) * .5) 0 0 #c9c6bd, calc(var(--sx) * var(--edge-rest) * -1) calc(var(--edge-rest) * .6) 0 0 #e4e1d9;
+}
+
+/* ---------- scrolling: each page, or row of two, is followed by its number on the desk, between two short rules ---------- */
+.folio, .reader:not(.paged) .spread[data-folio]::before { height: 40px; display: flex; align-items: center; justify-content: center; flex: none; box-sizing: border-box; padding-top: 4px;
+  font: 500 .78rem var(--serif); font-variant-numeric: lining-nums tabular-nums; letter-spacing: .04em; color: var(--rmuted); user-select: none; pointer-events: none;
+  background: linear-gradient(currentColor, currentColor) calc(50% - 50px) 55% / 22px 1px no-repeat, linear-gradient(currentColor, currentColor) calc(50% + 50px) 55% / 22px 1px no-repeat; }
+.reader:not(.paged) .spread[data-folio]::before { content: attr(data-folio); position: absolute; left: 0; right: 0; top: 100%; }
+.reader:not(.paged) .reader-pages > .pdf-page { margin-bottom: 0; }
+.reader:not(.paged) .spread[data-folio] { margin-bottom: calc(var(--page-gap, 12px) + 40px); }
+html[data-show-folios="0"] .folio { height: 14px; font-size: 0; background: none; }
+html[data-show-folios="0"] .reader:not(.paged) .spread[data-folio]::before { display: none; }
+html[data-show-folios="0"] .reader:not(.paged) .spread[data-folio] { margin-bottom: var(--page-gap, 12px); }
+.reader.paged .folio { display: none; }
