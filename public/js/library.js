@@ -1,4 +1,4 @@
-import { api, coverUrl, fileUrl } from './api.js';
+import { api, coverUrl, fileUrl, refreshCover } from './api.js';
 import { chip, openBookInfo, openListPicker, openTagPicker } from './dialogs.js';
 import { openWithMenu, readerMenuItems } from './openwith.js';
 import { openRename } from './rename.js';
@@ -366,6 +366,20 @@ export function createLibraryView(route) {
     syncSelection();
   }
 
+  /** Draw the cover again from the file (a saved cover is only a cache), then show the new one. */
+  const rebuildCover = async (book) => {
+    try {
+      await api.post(`/books/${book.id}/cover/rebuild`);
+      await refreshCover(book);
+      for (const img of document.querySelectorAll(`.card[data-id="${book.id}"] .cover img`)) {
+        img.removeAttribute('src');
+        img.src = coverUrl(book);
+      }
+      toast('Cover rebuilt');
+    } catch (e) {
+      toast(`Could not rebuild the cover: ${e.message}`);
+    }
+  };
   const canRename = () => !store.info?.readOnly;
   const afterRename = () => {
     selected.clear();
@@ -465,6 +479,7 @@ export function createLibraryView(route) {
             canRename() && book.group ? { label: 'Rename folder…', onClick: () => doRenameFolder(book.dir, book.group) } : null,
             ...(store.info?.sessions && !book.isFolder ? [{ label: 'Add to session…', onClick: () => openSessionPicker({ bookIds: [book.id] }) }] : []),
             ...readerMenuItems({ bookIds: [book.id] }, 1),
+            book.isFolder ? null : { label: 'Rebuild cover', onClick: () => rebuildCover(book) },
             book.isFolder ? null : { label: 'Download', onClick: () => (location.href = fileUrl(book, true)) },
             canRename() ? { label: 'Move to trash…', danger: true, onClick: () => doTrashBooks([book]) } : null,
           ].filter(Boolean));

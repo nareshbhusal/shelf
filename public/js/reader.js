@@ -104,7 +104,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     h('span', { class: 'bar-sep' }),
     h('button', { class: 'icon-btn', title: 'Open this book in one of your programs, at this page', onClick: (e) => { const n = isEpub ? (estPages ? estPage() : 0) : parseInt(pageInput.value, 10); openWithMenu(e.currentTarget, { bookIds: [book.id], ...(n > 0 ? { page: n } : {}) }, 1); } }, icon('external', 18)),
     search ? search.button : null,
-    h('button', { class: 'icon-btn', title: 'File info (I)', onClick: () => openFileInfo(book, ann) }, icon('info', 18)),
+    h('button', { class: 'icon-btn', title: 'File info (I)', onClick: () => openFileInfo(book, ann, { coverFromPage }) }, icon('info', 18)),
     h('span', { class: 'bar-sep' }),
     h('button', { class: 'icon-btn mode-btn', title: 'Reading mode (M)', onClick: () => toggleMode() }, icon('paged', 18)),
     isEpub ? null : h('button', { class: 'icon-btn spread-btn', title: 'Two pages side by side (S)', onClick: () => toggleSpread() }, icon('spread', 18)),
@@ -405,6 +405,21 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
    * ← / → while scrolling: no animation, so it is as quick as the key repeats. A page wider than the window moves
    * sideways; otherwise it is the previous / next page (or spread, or EPUB section).
    */
+  /** A small JPEG of the page being read, as the reader drew it, to use as the book's cover (null for EPUB / not drawn yet). */
+  async function coverFromPage() {
+    if (isEpub) return null;
+    const sel = book.format === 'pdf' ? `.pdf-page[data-page="${currentPage}"] canvas` : `.comic-page[data-page="${currentPage}"][data-part="${parts?.[partIdx]?.id ?? ''}"]`;
+    const src = pagesEl.querySelector(sel) ?? (book.format === 'pdf' ? null : pagesEl.querySelector(`.comic-page[data-page="${currentPage}"]`));
+    const w = src?.naturalWidth || src?.width;
+    if (!src || !w || (src.complete === false)) return null;
+    const out = document.createElement('canvas');
+    out.width = Math.min(800, w);
+    out.height = Math.round(((src.naturalHeight || src.height) * out.width) / w);
+    out.getContext('2d').drawImage(src, 0, 0, out.width, out.height);
+    const blob = await new Promise((ok) => out.toBlob(ok, 'image/jpeg', 0.9));
+    return blob ? { blob, bookId: parts?.[partIdx]?.id ?? book.id } : null;
+  }
+
   function sideStep(dir) {
     if (isEpub) return impl?.step(dir);
     if (scroller.scrollWidth > scroller.clientWidth + 2) return scroller.scrollBy({ left: dir * Math.max(160, scroller.clientWidth * 0.15), behavior: 'instant' });
@@ -524,7 +539,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
       case ']': impl?.fontStep?.(1); break;
       case 't': case 'T': impl?.toggleToc?.(); break;
       case 'n': case 'N': ann?.toggleDrawer(); break;
-      case 'i': case 'I': openFileInfo(book, ann); break;
+      case 'i': case 'I': openFileInfo(book, ann, { coverFromPage }); break;
       case '+': case '=': zoom(1); break;
       case '-': case '_': zoom(-1); break;
       case '0': fitWidth(); break;

@@ -1,4 +1,4 @@
-import { api } from './api.js';
+import { api, refreshCover } from './api.js';
 import { copyText, toastCopied } from './annotations.js';
 import { bookName } from './settings.js';
 import { modal, toast } from './ui.js';
@@ -8,7 +8,7 @@ import { fmtBytes, h, hashFor, dirSegments, icon, progressText } from './util.js
 const when = (ms) => (ms ? new Date(ms).toLocaleString() : '—');
 
 /** The "file info" panel of the reader. `ann` (optional) says what is known about annotations. */
-export async function openFileInfo(book, ann) {
+export async function openFileInfo(book, ann, { coverFromPage } = {}) {
   let info;
   try {
     info = await api.get(`/books/${book.id}/info`);
@@ -64,5 +64,26 @@ export async function openFileInfo(book, ann) {
     h('p', { class: 'muted small' }, 'The fingerprint above is computed by Shelf from the file (size plus three samples of its content) and stored in Shelf’s own database, never in the file. It keeps tags, lists and progress attached when the file is moved or renamed with its content unchanged; it changes with any edit, so a file that was moved and edited together shows up as missing, and you can merge it there.'),
     identityHelp(),
   );
-  const m = modal({ title: 'File info', body, wide: true, footer: [h('button', { class: 'btn primary', onClick: () => m.close() }, 'Close')] });
+  const useAsCover = coverFromPage
+    ? h(
+        'button',
+        {
+          class: 'btn',
+          title: 'Show the page you are on as this book’s cover in the library. Only Shelf’s cover picture changes, never the file.',
+          onClick: async () => {
+            try {
+              const snap = await coverFromPage();
+              if (!snap) return toast('That page has not been drawn yet. Wait for it to appear and try again.');
+              await api.put(`/books/${snap.bookId}/cover`, snap.blob);
+              await refreshCover({ id: snap.bookId, fingerprint: info.fingerprint });
+              toast('This page is now the cover');
+            } catch (e) {
+              toast(e.message, 'error');
+            }
+          },
+        },
+        'Use this page as the cover',
+      )
+    : null;
+  const m = modal({ title: 'File info', body, wide: true, footer: [useAsCover, h('button', { class: 'btn primary', onClick: () => m.close() }, 'Close')].filter(Boolean) });
 }

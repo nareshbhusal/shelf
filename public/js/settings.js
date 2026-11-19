@@ -319,6 +319,11 @@ export function openSettings() {
     await runScan({ full: true });
     toast('Re-reading metadata for every book…');
   });
+  const coversBtn = h('button', { class: 'btn', title: 'Draw every cover again from its file. Nothing in your library changes.' }, 'Rebuild all covers');
+  coversBtn.onclick = busy(coversBtn, async () => {
+    const r = await api.post('/covers/rebuild-all');
+    toast(`${r.removed} covers cleared. They are drawn again as you browse the library.`);
+  });
   const missing = info?.missing ?? 0;
   // Opens the list of missing books, where each can be looked at and forgotten (or all at once).
   const purgeBtn = h('button', { class: 'btn', title: 'See which books are missing and what Shelf remembers about them' });
@@ -441,7 +446,7 @@ export function openSettings() {
     h('h3', null, 'Library'),
     h('div', { class: 'muted small' }, 'Folder: ', h('code', null, info?.libraryDir ?? '…')),
     warn,
-    h('div', { class: 'btn-row' }, rescanBtn, rebuildBtn, purgeBtn),
+    h('div', { class: 'btn-row' }, rescanBtn, rebuildBtn, coversBtn, purgeBtn),
     identityHelp(),
     h('div', { class: 'muted small' }, 'Display settings are saved with this shelf, so every browser you open it from uses the same ones.'),
     h('div', { class: 'btn-row' }, resetBtn),

@@ -542,6 +542,16 @@ page, most of the volume on the left by page 40 (or a fifth of a short book) whi
 you pass the middle, and by the last spread the unread side is
 flat and the volume is all on the left.
 
+**Covers.** A PDF's cover is page 1, drawn by mupdf (the library that also writes the annotations; poppler's
+`pdftoppm` is the fallback for files mupdf refuses or that are over 120 MB). A cover is only a cached picture in
+`data/thumbs`, never part of your library, so these can change it safely:
+- a card's menu has **Rebuild cover**, which throws the saved image away and draws it again from the file;
+- Settings > Library has **Rebuild all covers**, which clears every saved cover; each is drawn again when you next browse
+  (the browser re-checks covers every time, so a redrawn one always shows);
+- in the reader, **File info > Use this page as the cover** keeps the page you are on (as the reader draws it) as the
+  book's cover. Handy when page 1 is a blank or title page, or a publisher's scan that another renderer composes
+  differently. It works for PDFs and comics; Rebuild cover undoes it.
+
 **What cards show.** Settings > Library has a choice for each of the author / folder line, the format badge, the page
 count, tags and the reading-progress bar: *Always*, *On hover* (it fades in while the pointer is on the card, or the
 card is selected or has keyboard focus; touch screens, which cannot hover, always show it) or *Never*. The progress bar

@@ -3,7 +3,7 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { DATA_DIR, HOST, HOST_LIBRARY, IN_DOCKER, LIBRARY_DIR, OPENER_SOCKET, PDFJS_DIR, PORT, READONLY, ROOT, SESSIONS_CMD, SHELF_NAME } from './config.js';
 import { AUTH_ON, authGate } from './auth.js';
-import { ensureThumb } from './covers.js';
+import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb } from './covers.js';
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
@@ -515,8 +515,31 @@ app.get('/api/books/:id/cover', async (req, res) => {
   const book = getBook(req.params.id);
   const thumb = await ensureThumb(book);
   if (!thumb) return res.status(404).json({ error: 'no cover' });
-  cacheHeaders(req, res, book);
+  // A cover can be redrawn or replaced at any time, so the browser asks (cheap: the answer is "unchanged") instead of keeping it for good.
+  res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(thumb, { dotfiles: 'allow', cacheControl: false });
+});
+
+// "Use this page as the cover": the reader sends a picture of a page it drew; it replaces the saved cover (nothing in the library changes).
+app.put('/api/books/:id/cover', express.raw({ type: 'image/*', limit: '12mb' }), async (req, res) => {
+  const book = getBook(req.params.id);
+  if (!Buffer.isBuffer(req.body) || !req.body.length) return res.status(400).json({ error: 'send the image as the request body' });
+  try {
+    await setThumb(book, req.body);
+  } catch {
+    return res.status(400).json({ error: 'that is not an image I can read' });
+  }
+  res.json({ ok: true });
+});
+
+// Cover images are only a cache of what the file shows, so making one again is always safe (and works in read-only libraries).
+// Every saved cover goes; each one is drawn again the next time a card asks for it.
+app.post('/api/covers/rebuild-all', async (_req, res) => res.json({ removed: await forgetAllThumbs() }));
+
+app.post('/api/books/:id/cover/rebuild', async (req, res) => {
+  const book = getBook(req.params.id);
+  await forgetThumb(book);
+  res.json({ ok: true, cover: !!(await ensureThumb(book)) });
 });
 
 app.get('/api/books/:id/pages', async (req, res) => {

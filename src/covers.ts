@@ -3,6 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import sharp from 'sharp';
+import * as mupdf from 'mupdf';
 import { LIBRARY_DIR, THUMB_DIR } from './config.js';
 import type { BookRow } from './db.js';
 import { epubInfo } from './meta.js';
@@ -62,7 +63,34 @@ async function build(book: BookRow): Promise<string | null> {
   }
 }
 
+/**
+ * Page 1 drawn by mupdf, which is also what writes the annotations. It composes pages built from several layered images
+ * (as some publishers' scans are) the way the reader's PDF.js does, where poppler's pdftoppm has shown a mixture of two
+ * pages. Files too big to hold in memory for a thumbnail, or anything mupdf refuses, fall back to poppler.
+ */
+const MUPDF_MAX_BYTES = 120 * 1024 * 1024;
+async function mupdfCover(abs: string, tmpOut: string): Promise<boolean> {
+  try {
+    if ((await fs.stat(abs)).size > MUPDF_MAX_BYTES) return false;
+    const doc = mupdf.Document.openDocument(await fs.readFile(abs), 'application/pdf');
+    try {
+      if (!doc.countPages()) return false;
+      const page = doc.loadPage(0);
+      const [x0, , x1] = page.getBounds();
+      const scale = THUMB_WIDTH / Math.max(1, x1 - x0);
+      const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, true);
+      await fs.writeFile(tmpOut, pix.asJPEG(82, false));
+      return true;
+    } finally {
+      doc.destroy();
+    }
+  } catch {
+    return false;
+  }
+}
+
 async function pdfCover(abs: string, tmpOut: string): Promise<void> {
+  if (await mupdfCover(abs, tmpOut)) return;
   // pdftoppm appends ".jpg" itself; render to a prefix, then move into place.
   const prefix = tmpOut.replace(/\.jpg\.[^/]*\.tmp$/, '') + `.${process.pid}.render`;
   await execFileP(
@@ -71,6 +99,32 @@ async function pdfCover(abs: string, tmpOut: string): Promise<void> {
     { timeout: 30_000 },
   );
   await fs.rename(`${prefix}.jpg`, tmpOut);
+}
+
+/** Keep a picture the reader chose (a page it showed correctly) as the book's cover. Only the cover cache changes. */
+export async function setThumb(book: BookRow, image: Buffer): Promise<void> {
+  const out = path.join(THUMB_DIR, `${book.fingerprint}.jpg`);
+  const tmp = `${out}.${process.pid}.tmp`;
+  await sharp(image).resize({ width: THUMB_WIDTH * 2, withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(tmp);
+  await fs.rename(tmp, out);
+  await fs.rm(`${out}.none`, { force: true });
+}
+
+/** Throw away a book's saved cover (and the notes about it) so the next request makes it again from the file. */
+export async function forgetThumb(book: BookRow): Promise<void> {
+  const out = path.join(THUMB_DIR, `${book.fingerprint}.jpg`);
+  await Promise.all([out, `${out}.none`].map((f) => fs.rm(f, { force: true })));
+}
+
+/** Throw away every saved cover (they are only a cache); each is made again on demand. Returns how many there were. */
+export async function forgetAllThumbs(): Promise<number> {
+  let n = 0;
+  for (const name of await fs.readdir(THUMB_DIR)) {
+    if (!/^[0-9a-f]{40}\.jpg(\.none)?$/.test(name)) continue;
+    await fs.rm(path.join(THUMB_DIR, name), { force: true });
+    if (name.endsWith('.jpg')) n++;
+  }
+  return n;
 }
 
 async function archiveCover(book: BookRow, abs: string): Promise<Buffer | null> {
