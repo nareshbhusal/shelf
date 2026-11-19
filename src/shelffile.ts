@@ -349,7 +349,7 @@ export function checkShelf(spec: ShelfSpec): Report {
   const L = real(spec.library), D = real(spec.data);
   if (L === D) r.errors.push('library and data are the same folder.');
   else if (inside(L, D)) r.errors.push('the library is inside the data folder.');
-  else if (inside(D, L)) r.warnings.push('the data folder is inside the library: covers and the database would sit among your books.');
+  else if (inside(D, L)) r.info.push('the data folder is inside the library: Shelf skips it when scanning, so its covers and database never show up as books.');
   for (const m of spec.requireMount) {
     const M = real(m);
     if (!inside(L, M)) r.warnings.push(`library is not inside the required mount ${m}: it would not be protected by it.`);

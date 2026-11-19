@@ -1,7 +1,7 @@
 import type { Dirent } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { EXT_FORMAT, IGNORE, LIBRARY_DIR, type Format } from './config.js';
+import { DATA_DIR, EXT_FORMAT, IGNORE, LIBRARY_DIR, type Format } from './config.js';
 import { db, type BookRow } from './db.js';
 import { cbzInfo, epubInfo, pdfMeta, type Meta } from './meta.js';
 import { checkpoint, gcThumbs } from './hygiene.js';
@@ -55,7 +55,8 @@ const dirOf = (rel: string) => {
 // Folders named in the shelf file's "ignore" list are not entered at all.
 const IGNORE_NAMES = new Set(IGNORE.filter((e) => !e.includes('/')));
 const IGNORE_PATHS = new Set(IGNORE.filter((e) => e.includes('/')));
-const ignored = (name: string, abs: string) => IGNORE_NAMES.has(name) || (IGNORE_PATHS.size > 0 && IGNORE_PATHS.has(toRel(abs)));
+// The data folder is never part of the library, even when it sits inside it (nothing to put in "ignore").
+const ignored = (name: string, abs: string) => abs === DATA_DIR || IGNORE_NAMES.has(name) || (IGNORE_PATHS.size > 0 && IGNORE_PATHS.has(toRel(abs)));
 
 async function walk(): Promise<Found[]> {
   const out: Found[] = [];
