@@ -171,3 +171,10 @@ for (const name of ['append', 'prepend', 'replaceChildren']) {
     return native.apply(this, nodes.filter((n) => n != null && n !== false));
   };
 }
+
+/** Back out of the reader/viewer: step back in history when we came from a library page (so it is shown as we left it,
+ *  scroll position included), otherwise go to the file's folder. */
+export function goBack(fallbackHref) {
+  if (history.state?.from) history.back();
+  else location.hash = fallbackHref;
+}

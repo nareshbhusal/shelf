@@ -1,7 +1,7 @@
 import { api, fileUrl, pageUrl } from './api.js';
 import { createAnnotations } from './annotations.js';
 import { bookName, onSettings, setSetting, settings } from './settings.js';
-import { h, hashFor, icon, clamp, dirSegments } from './util.js';
+import { h, hashFor, icon, clamp, dirSegments, goBack } from './util.js';
 import { appName } from './store.js';
 import { openFileInfo } from './fileinfo.js';
 import { openWithMenu } from './openwith.js';
@@ -90,7 +90,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   const bar = h(
     'div',
     { class: 'reader-bar' },
-    h('a', { class: 'icon-btn', href: backHref, title: 'Back to library (Esc)' }, icon('back')),
+    h('a', { class: 'icon-btn', href: backHref, title: 'Back to library (Esc)', onClick: (e) => { e.preventDefault(); goBack(backHref); } }, icon('back')),
     titleEl,
     h('div', { class: 'series-nav hidden' },
       h('button', { class: 'icon-btn', title: 'Previous part (<)', onClick: () => goPart(-1) }, icon('prev', 16)),
@@ -525,7 +525,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     if (e.target?.tagName === 'INPUT' || e.ctrlKey || e.metaKey || e.altKey) return;
     if (document.getElementById('modal-root').childElementCount) return;
     switch (e.key) {
-      case 'Escape': if (!search?.consumeEscape() && !ann?.consumeEscape() && !impl?.consumeEscape?.()) location.hash = backHref; break;
+      case 'Escape': if (!search?.consumeEscape() && !ann?.consumeEscape() && !impl?.consumeEscape?.()) goBack(backHref); break;
       case '/': if (search) { search.open(); e.preventDefault(); } break;
       case 'ArrowLeft': if (mode === 'paged') turn(rtl ? 1 : -1); else sideStep(-1); e.preventDefault(); break;
       case 'ArrowRight': if (mode === 'paged') turn(rtl ? -1 : 1); else sideStep(1); e.preventDefault(); break;

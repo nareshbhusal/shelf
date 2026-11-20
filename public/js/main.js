@@ -350,9 +350,41 @@ function renderScan() {
 let routeSeq = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Scroll memory: every history entry remembers how far its page was scrolled, so coming back (or reloading)
+// lands where you were, while a fresh visit starts at the top. `scrollKey` is the page being tracked; it is
+// null while a page is changing, so a late scroll event can't write into the wrong entry.
+let scrollKey = null;
+let scrollTimer = 0;
+function rememberScroll() {
+  clearTimeout(scrollTimer);
+  if (scrollKey === null || scrollKey !== location.hash) return;
+  try { history.replaceState({ ...history.state, scroll: main.scrollTop }, ''); } catch { /* rate-limited or not allowed: forget it */ }
+}
+main.addEventListener('scroll', () => { clearTimeout(scrollTimer); scrollTimer = setTimeout(rememberScroll, 120); }, { passive: true });
+addEventListener('pagehide', rememberScroll);
+function restoreScroll(target, seq) {
+  let tries = 0;
+  const step = () => {
+    if (seq !== routeSeq) return;
+    main.scrollTop = target;
+    if (target && Math.abs(main.scrollTop - target) > 2 && ++tries < 30) return requestAnimationFrame(step); // not tall enough yet
+    scrollKey = location.hash;
+  };
+  step();
+}
+
+let lastRouteName = null;
 async function onRoute() {
   const seq = ++routeSeq;
+  const savedScroll = Number(history.state?.scroll) || 0;
+  scrollKey = null;
+  clearTimeout(scrollTimer);
   route = parseHash();
+  const cameFrom = lastRouteName; // the page we are leaving (null on a first load or reload)
+  lastRouteName = route.name;
+  if (route.name === 'read' && cameFrom && cameFrom !== 'read') {
+    try { history.replaceState({ ...history.state, from: true }, ''); } catch { /* fine */ }
+  }
   document.body.classList.remove('nav-open');
   document.body.classList.toggle('reading', route.name === 'read');
   view?.destroy();
@@ -370,7 +402,7 @@ async function onRoute() {
     if (seq !== routeSeq) return v.destroy();
     view = v;
     main.replaceChildren(v.el);
-    main.scrollTop = 0;
+    restoreScroll(savedScroll, seq);
     document.title = `${v.title} — ${appName()}`;
     v.ready.then(() => seq === routeSeq && (document.title = `${v.title} — ${appName()}`));
     searchInput.value = '';
@@ -389,7 +421,8 @@ async function onRoute() {
     if (seq !== routeSeq) return v.destroy();
     view = v;
     main.replaceChildren(v.el);
-    main.scrollTop = 0;
+    restoreScroll(savedScroll, seq);
+    v.ready.then(() => seq === routeSeq && savedScroll && main.scrollTop < savedScroll - 2 && restoreScroll(savedScroll, seq)); // data arrived late
     document.title = `${v.title} — ${appName()}`;
     if (document.activeElement !== searchInput) searchInput.value = route.query.get('q') ?? '';
   }

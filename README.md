@@ -233,6 +233,9 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   drives reject, length, clashes with other books, with files not yet indexed, or within the batch)
   and if anything is wrong nothing is renamed. Swapping names works. The book keeps its identity, so tags,
   lists, reading progress and covers stay with it; a toast offers **Undo** afterwards.
+- **Scroll position** is remembered per page: open a book and come back (the browser's Back, the reader's Back
+  button or Esc) or reload, and the library is where you left it. Visiting a page afresh (a sidebar link, say)
+  starts at the top.
 - **Search** (press `/`) matches title, author, series, file name, path and tag names. It stays where you are: inside a
   folder it searches that folder and everything below it, in a reading list or "recently read" only those books, and in
   all books it keeps your tag and format filters. A line under the title says so and offers **Search the whole library**.
