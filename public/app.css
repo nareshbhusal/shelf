@@ -187,15 +187,11 @@ html[data-card-tilt="1"] .card:hover .tilting .cover-wrap::before { opacity: 1; 
    so when the book turns you see them turn. The stage is a still frame with a close camera placed up and to the right of the book,
    so the right and top edges show at rest while the cover itself stays undistorted. Thickness follows the page count. */
 :root { --paper: #ebe4d2; --paper-shade: #c9bfa6; }
-.book-stage { position: relative; z-index: 1; --t: 0px; perspective: 260px; perspective-origin: var(--vx, 165%) var(--vy, -30%); transition: perspective-origin .6s cubic-bezier(.2, .7, .2, 1); }
+.book-stage { position: relative; z-index: 1; --t: var(--thick, 0px); perspective: 260px; perspective-origin: var(--vx, 165%) var(--vy, -30%); transition: perspective-origin .6s cubic-bezier(.2, .7, .2, 1); }
 /* tilt.js moves the camera (--vx --vy) with the pointer, in the direction the book turns, so the side turning away hides its face and the
    side coming forward shows it (pages, spine, top, bottom); the cover itself never distorts. A small turn is added on top. */
 .book-stage.tilting { transition: perspective-origin .25s ease-out; }
 .book-stage.entering { transition: perspective-origin .45s ease-out; }
-.book-stage[data-edge="1"] { --t: calc(var(--card-w) * .03); --bind: 5.5%; }
-.book-stage[data-edge="2"] { --t: calc(var(--card-w) * .055); --bind: 8%; }
-.book-stage[data-edge="3"] { --t: calc(var(--card-w) * .08); --bind: 11.5%; --hinge: .2; }
-.book-stage[data-edge="4"] { --t: calc(var(--card-w) * .11); --bind: 15%; --hinge: .28; }
 html[data-page-edge="0"] .book-stage, .book-stage.far { --t: 0px; perspective: none; }
 .book3d { position: relative; transform-style: preserve-3d; transform-origin: 50% 50% calc(var(--t) / -2); transition: transform .55s cubic-bezier(.2, .7, .2, 1); }
 .card:hover .book3d { transform: translateY(-5px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); }

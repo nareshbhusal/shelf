@@ -288,9 +288,10 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   colour, UI size, reader widths and EPUB text. It all lives in one table in `public/js/settings.js`.
 - **How a book card looks.** The cover has a creased spine with a catch of light, and behind it the book is a real
   solid: paper edges on the right, top and bottom and a spine in the cover's own colour on the left, all drawn in 3D
-  so they turn when you tilt it. The book is thicker the more pages it has (four steps, from a booklet to a thick
-  novel), and so is its bound region: a thin booklet has a narrow crease, a fat book a wide one with a second groove
-  where the cover hinges. Only books on or near the screen are drawn as solids, which keeps scrolling light in big libraries; turning
+  so they turn when you tilt it. The book is thicker the more pages it has, on a smooth log scale (each doubling counts the same, so 600 and 1,500
+  pages differ: about 9 px of page edge at 100 pages, 13 px at 320, 15 px at 600, 18 px at 1,500 on a 170 px card), and
+  so is its bound region: a thin booklet has a narrow crease, a fat book a wide one with a second groove where the
+  cover hinges. Books with no page count count as medium. Only books on or near the screen are drawn as solids, which keeps scrolling light in big libraries; turning
   "Page edges" off makes it lighter still. Reading progress
   is a bookmark ribbon hanging from the top edge, longer the further you are into the book; a finished book gets
   a short greyed ribbon with a tick. When the pointer is over a cover it lifts and the view of it shifts with the pointer, as if you moved your head: the cover

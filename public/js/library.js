@@ -21,8 +21,14 @@ const openHref = (b) => hashFor('read', [String(b.id)]);
 /** From a folder listing, a lone comic in its own folder opens that folder (the series page); everywhere else it opens the reader. */
 const cardHref = (b, inDir) => (b.group && inDir !== null && inDir !== b.dir ? hashFor('files', dirSegments(b.dir)) : openHref(b));
 
-/** How thick the stack of page edges looks: a thin booklet to a thick novel. */
-const edgeLevel = (b) => (!b.pages ? 2 : b.pages <= 40 ? 1 : b.pages <= 160 ? 2 : b.pages <= 450 ? 3 : 4);
+/** How bulky a book is, 0 (a booklet of 20 pages) to 1 (2,000 pages or more), on a log scale so each doubling counts the same: 100 pages
+ *  0.35, 320 pages 0.60, 600 pages 0.74, 1,500 pages 0.94. Books with no page count are taken as medium. */
+const bulk = (b) => (b.pages ? Math.min(1, Math.max(0, Math.log(b.pages / 20) / Math.log(100))) : 0.4);
+/** The look that goes with it, as CSS variables for the stage: thickness, how wide the bound region is, how deep the hinge groove. */
+const bulkStyle = (b) => {
+  const k = bulk(b);
+  return `--thick: calc(var(--card-w) * ${(0.018 + 0.095 * k).toFixed(4)}); --bind: ${(5 + 10.5 * k).toFixed(2)}%; --hinge: ${Math.max(0, (k - 0.4) * 0.5).toFixed(3)}`;
+};
 /** The book as a solid: the cover in front, and behind it the fore-edge, top, bottom and spine, so tilting shows real depth.
  *  `body` is the cover. The spine takes the cover's average colour once the picture has loaded. */
 // Only the books on (or near) the screen are drawn as solids: a library of thousands of 3D layers would make scrolling heavy.
@@ -33,7 +39,7 @@ const farBooks = new IntersectionObserver((entries) => {
   }
 }, { rootMargin: '200px 0px' });
 const bookBody = (book, body) => {
-  const stage = h('div', { class: 'book-stage', dataset: { edge: edgeLevel(book) } }, h('div', { class: 'book3d' }, body, ...['right', 'top', 'bottom', 'left'].map((side) => h('i', { class: `face ${side}`, 'aria-hidden': 'true' }))));
+  const stage = h('div', { class: 'book-stage', style: bulkStyle(book) }, h('div', { class: 'book3d' }, body, ...['right', 'top', 'bottom', 'left'].map((side) => h('i', { class: `face ${side}`, 'aria-hidden': 'true' }))));
   const img = body.querySelector('img');
   if (img) img.addEventListener('load', () => spineColour(img, stage), { once: true });
   farBooks.observe(stage);
