@@ -5,10 +5,12 @@ import { copyList, createSessionView, openListInViewer, openSessionPicker, unlin
 import { applySettings, onSettings, openSettings, setSetting, settings, sidebarOrder, syncSettings } from './settings.js';
 import { appName, events, refreshInfo, refreshMeta, refreshSessions, startSessionPolling, runScan, store, subscribe, watchScan } from './store.js';
 import { api } from './api.js';
+import { startTilt } from './tilt.js';
 import { askText, confirmDialog, popMenu, toast } from './ui.js';
 import { debounce, dirSegments, h, hashFor, icon, parseHash, plural, tagColor } from './util.js';
 
 applySettings();
+startTilt();
 
 const app = document.getElementById('app');
 let view = null;

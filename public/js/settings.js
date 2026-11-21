@@ -48,13 +48,16 @@ const SCHEMA = [
       { key: 'cardGap', label: 'Card gap', type: 'range', min: 4, max: 40, step: 2, unit: 'px', default: 16 },
       { key: 'coverFit', label: 'Cover fit', type: 'select', options: [['cover', 'Fill (crop)'], ['contain', 'Fit (letterbox)']], default: 'cover' },
       { key: 'coverRatio', label: 'Cover shape', type: 'select', options: [['2 / 3', 'Portrait 2:3'], ['3 / 4', 'Portrait 3:4'], ['1 / 1', 'Square']], default: '2 / 3' },
+      { key: 'pageEdge', label: 'Page edges on covers (thicker for longer books)', type: 'checkbox', default: true },
+      { key: 'cardTilt', label: 'Tilt covers toward the pointer', type: 'checkbox', default: true },
       { key: 'titleLines', label: 'Title lines', type: 'select', options: [['1', '1'], ['2', '2'], ['3', '3']], default: '2' },
       { key: 'groupComics', label: 'Multi-part series as one card (folders with several comics)', type: 'checkbox', default: true },
       { key: 'showAuthor', label: 'Author / folder line', type: 'select', options: SHOW, default: 'always' },
       { key: 'showFormat', label: 'Format badge', type: 'select', options: SHOW, default: 'always' },
       { key: 'showPages', label: 'Page count', type: 'select', options: SHOW, default: 'always' },
       { key: 'showTags', label: 'Tags on cards', type: 'select', options: SHOW, default: 'never' },
-      { key: 'showProgress', label: 'Reading progress bar', type: 'select', options: [['always', 'Always'], ['unfinished', 'Until finished'], ['hover', 'On hover'], ['never', 'Never']], default: 'always' },
+      { key: 'progressStyle', label: 'Reading progress shown as', type: 'select', options: [['ribbon', 'Bookmark ribbon'], ['bar', 'Bar along the bottom']], default: 'ribbon' },
+      { key: 'showProgress', label: 'Reading progress', type: 'select', options: [['always', 'Always'], ['unfinished', 'Until finished'], ['hover', 'On hover'], ['never', 'Never']], default: 'always' },
     ],
   },
   {
@@ -190,6 +193,9 @@ export function applySettings() {
   root.dataset.coverFit = s.coverFit;
   root.dataset.readerBg = s.readerBg;
   for (const k of CARD_PARTS) root.dataset[k] = s[k] = cardPart(k, s[k]);
+  root.dataset.pageEdge = s.pageEdge ? '1' : '0';
+  root.dataset.cardTilt = s.cardTilt ? '1' : '0';
+  root.dataset.progressStyle = s.progressStyle;
   root.dataset.showFolios = s.showFolios ? '1' : '0';
   const set = (k, v) => root.style.setProperty(k, v);
   set('--card-w', `${s.cardWidth}px`);

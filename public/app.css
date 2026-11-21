@@ -152,29 +152,74 @@ input[type="range"] { accent-color: var(--accent); }
 .tags { display: none; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
 
 /* what a card shows (Settings > Library): always, only while the pointer is on it, or never */
-.badge, .progress, .sub, .tags { transition: opacity .16s; }
-html[data-show-format="never"] .badge.fmt, html[data-show-pages="never"] .badge.pg, html[data-show-progress="never"] .progress, html[data-show-author="never"] .sub { display: none; }
-html[data-show-progress="unfinished"] .progress.done { display: none; }
+.badge, .progress, .ribbon, .sub, .tags { transition: opacity .16s; }
+html[data-show-format="never"] .badge.fmt, html[data-show-pages="never"] .badge.pg, html[data-show-progress="never"] :is(.progress, .ribbon), html[data-show-author="never"] .sub { display: none; }
+html[data-show-progress="unfinished"] :is(.progress, .ribbon).done { display: none; }
+html[data-progress-style="ribbon"] .progress, html[data-progress-style="bar"] .ribbon { display: none; }
 html[data-show-tags="always"] .tags:not(:empty), html[data-show-tags="hover"] .tags:not(:empty) { display: flex; }
-html[data-show-format="hover"] .badge.fmt, html[data-show-pages="hover"] .badge.pg, html[data-show-progress="hover"] .progress, html[data-show-author="hover"] .sub, html[data-show-tags="hover"] .tags { opacity: 0; }
+html[data-show-format="hover"] .badge.fmt, html[data-show-pages="hover"] .badge.pg, html[data-show-progress="hover"] :is(.progress, .ribbon), html[data-show-author="hover"] .sub, html[data-show-tags="hover"] .tags { opacity: 0; }
 html[data-show-format="hover"] .card:is(:hover, :focus-visible, .selected) .badge.fmt, html[data-show-pages="hover"] .card:is(:hover, :focus-visible, .selected) .badge.pg,
-html[data-show-progress="hover"] .card:is(:hover, :focus-visible, .selected) .progress, html[data-show-author="hover"] .card:is(:hover, :focus-visible, .selected) .sub,
+html[data-show-progress="hover"] .card:is(:hover, :focus-visible, .selected) :is(.progress, .ribbon), html[data-show-author="hover"] .card:is(:hover, :focus-visible, .selected) .sub,
 html[data-show-tags="hover"] .card:is(:hover, :focus-visible, .selected) .tags { opacity: 1; }
-@media (hover: none) { html[data-show-format="hover"] .badge.fmt, html[data-show-pages="hover"] .badge.pg, html[data-show-progress="hover"] .progress, html[data-show-author="hover"] .sub, html[data-show-tags="hover"] .tags { opacity: 1; } } /* no pointer to hover with */
+@media (hover: none) { html[data-show-format="hover"] .badge.fmt, html[data-show-pages="hover"] .badge.pg, html[data-show-progress="hover"] :is(.progress, .ribbon), html[data-show-author="hover"] .sub, html[data-show-tags="hover"] .tags { opacity: 1; } } /* no pointer to hover with */
 
 /* grid view */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(var(--card-w), 1fr)); gap: calc(var(--gap) * 1.7) var(--gap); align-items: stretch; }
 .card { display: flex; flex-direction: column; color: var(--fg); position: relative; }
 .card:hover { text-decoration: none; }
 .cover-wrap { position: relative; z-index: 1; aspect-ratio: var(--cover-ratio); border-radius: calc(var(--radius) * .3) calc(var(--radius) * .55) calc(var(--radius) * .55) calc(var(--radius) * .3); overflow: hidden; background: var(--bg3); box-shadow: var(--cover-shadow); transition: transform .16s ease-out, box-shadow .16s ease-out; }
-.card:hover .cover-wrap { transform: translateY(-5px); box-shadow: var(--cover-shadow-up); }
+.card:hover .cover-wrap { box-shadow: var(--cover-shadow-up); }
+/* folders and series covers are flat: they only lift (a series leans with the pointer, see tilt.js) */
+.card:not(.book):hover .cover-wrap { transform: perspective(700px) translateY(-5px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); }
+/* tilting toward the pointer (tilt.js sets --rx --ry and the shading on the still stage, so the thing under the pointer never moves away from it): it follows with a little delay, eases in when the pointer arrives and out when it leaves */
+.tilting .cover-wrap, .tilting > .book3d { transition: transform .25s ease-out, box-shadow .2s ease-out; }
+.entering .cover-wrap, .entering > .book3d { transition: transform .45s ease-out, box-shadow .3s ease-out; }
+/* the light on the cover: not a hotspot (matte cloth and paper don't have one) but shading that follows the turn, the side going away a little darker and the side coming forward a little lighter */
+.cover-wrap::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0; transition: opacity .4s;
+  background:
+    linear-gradient(90deg, transparent 35%, rgba(0,0,0,var(--dr, 0))), linear-gradient(270deg, transparent 35%, rgba(0,0,0,var(--dl, 0))),
+    linear-gradient(180deg, transparent 35%, rgba(0,0,0,var(--db, 0))), linear-gradient(0deg, transparent 35%, rgba(0,0,0,var(--dt, 0))),
+    linear-gradient(90deg, transparent 35%, rgba(255,255,255,var(--lr, 0))), linear-gradient(270deg, transparent 35%, rgba(255,255,255,var(--ll, 0))),
+    linear-gradient(180deg, transparent 35%, rgba(255,255,255,var(--lb, 0))), linear-gradient(0deg, transparent 35%, rgba(255,255,255,var(--lt, 0))); }
+html[data-card-tilt="1"] .card:hover .tilting .cover-wrap::before { opacity: 1; }
+
+/* A book is a solid: the cover in front, and behind it the fore-edge (right), top, bottom and spine (left) as real faces in 3D,
+   so when the book turns you see them turn. The stage is a still frame with a close camera placed up and to the right of the book,
+   so the right and top edges show at rest while the cover itself stays undistorted. Thickness follows the page count. */
+:root { --paper: #ebe4d2; --paper-shade: #c9bfa6; }
+.book-stage { position: relative; z-index: 1; --t: 0px; perspective: 260px; perspective-origin: var(--vx, 165%) var(--vy, -30%); transition: perspective-origin .6s cubic-bezier(.2, .7, .2, 1); }
+/* tilt.js moves the camera (--vx --vy) with the pointer, in the direction the book turns, so the side turning away hides its face and the
+   side coming forward shows it (pages, spine, top, bottom); the cover itself never distorts. A small turn is added on top. */
+.book-stage.tilting { transition: perspective-origin .25s ease-out; }
+.book-stage.entering { transition: perspective-origin .45s ease-out; }
+.book-stage[data-edge="1"] { --t: calc(var(--card-w) * .03); }
+.book-stage[data-edge="2"] { --t: calc(var(--card-w) * .055); }
+.book-stage[data-edge="3"] { --t: calc(var(--card-w) * .08); }
+.book-stage[data-edge="4"] { --t: calc(var(--card-w) * .11); }
+html[data-page-edge="0"] .book-stage, .book-stage.far { --t: 0px; perspective: none; }
+.book3d { position: relative; transform-style: preserve-3d; transform-origin: 50% 50% calc(var(--t) / -2); transition: transform .55s cubic-bezier(.2, .7, .2, 1); }
+.card:hover .book3d { transform: translateY(-5px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); }
+.face { position: absolute; display: none; pointer-events: none; }
+html[data-page-edge="1"] .face { display: block; }
+html[data-page-edge="1"] .book-stage.far .face { display: none; }
+.face.right { top: 1px; bottom: 1px; width: var(--t); right: calc(var(--t) / -2); transform: translateZ(calc(var(--t) / -2)) rotateY(90deg);
+  background: linear-gradient(90deg, transparent, rgba(30,20,5,.3)), repeating-linear-gradient(90deg, var(--paper) 0 1px, var(--paper-shade) 1px 2px); border-radius: 0 2px 2px 0; }
+.face.top { left: 1px; right: 1px; height: var(--t); top: calc(var(--t) / -2); transform: translateZ(calc(var(--t) / -2)) rotateX(90deg);
+  background: linear-gradient(180deg, transparent, rgba(30,20,5,.25)), repeating-linear-gradient(180deg, var(--paper) 0 1px, var(--paper-shade) 1px 2px); }
+.face.bottom { left: 1px; right: 1px; height: var(--t); bottom: calc(var(--t) / -2); transform: translateZ(calc(var(--t) / -2)) rotateX(-90deg);
+  background: linear-gradient(0deg, transparent, rgba(30,20,5,.4)), repeating-linear-gradient(0deg, var(--paper-shade) 0 1px, var(--paper) 1px 2px); }
+.face.left { top: 0; bottom: 0; width: var(--t); left: calc(var(--t) / -2); transform: translateZ(calc(var(--t) / -2)) rotateY(-90deg);
+  background: linear-gradient(90deg, rgba(0,0,0,.35), rgba(0,0,0,.1)), var(--spine, #2f3a42); border-radius: 2px 0 0 2px; }
+.view-list .book-stage { perspective: none; width: 40px; }
+.view-list .face { display: none !important; }
+.view-list .card:hover .book3d { transform: none; }
 /* the binding: a crease and a catch of light along the spine edge, over any cover */
 .cover-wrap::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(0,0,0,.34) 0, rgba(255,255,255,.2) 1.2%, rgba(0,0,0,.16) 3.4%, rgba(255,255,255,.05) 5.5%, transparent 9%); }
 .cover, .cover img, .cover .ph { position: absolute; inset: 0; width: 100%; height: 100%; }
 .cover img { object-fit: var(--cover-fit); background: var(--bg3); }
 .cover .ph { display: flex; align-items: center; justify-content: center; font-family: var(--serif); font-size: 2.3rem; font-weight: 500; letter-spacing: .02em; color: rgba(255,255,255,.7); }
 .cover .ph::before { content: ""; position: absolute; inset: 9% 11%; border: 1px solid rgba(255,255,255,.32); }
-.badge { position: absolute; z-index: 2; left: 8px; top: 8px; font-size: .62rem; font-weight: 700; letter-spacing: .06em; padding: 1px 6px; border-radius: 3px; background: rgba(12,18,20,.7); color: #f1eee4; backdrop-filter: blur(2px); font-variant-numeric: tabular-nums; }
+.badge { position: absolute; z-index: 3; left: 8px; top: 8px; font-size: .62rem; font-weight: 700; letter-spacing: .06em; padding: 1px 6px; border-radius: 3px; background: rgba(12,18,20,.7); color: #f1eee4; backdrop-filter: blur(2px); font-variant-numeric: tabular-nums; }
 .badge.pg { left: auto; right: 8px; top: auto; bottom: 10px; letter-spacing: .02em; }
 .check, .more { position: absolute; z-index: 2; top: 6px; width: 26px; height: 26px; border-radius: 50%; border: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.62); color: #fff; padding: 0; }
 .check { right: 6px; border: 2px solid rgba(255,255,255,.85); background: rgba(0,0,0,.35); color: transparent; }
@@ -184,6 +229,14 @@ html[data-show-tags="hover"] .card:is(:hover, :focus-visible, .selected) .tags {
 .card.selected .cover-wrap { outline: 3px solid var(--accent); outline-offset: -3px; }
 .progress { position: absolute; z-index: 2; left: 0; right: 0; bottom: 0; height: 4px; background: rgba(0,0,0,.45); }
 .progress i { display: block; height: 100%; background: var(--accent); }
+/* a bookmark ribbon hanging from the top edge, near the spine: the further into the book, the longer it hangs; a finished book gets a short one with a tick */
+.ribbon { position: absolute; z-index: 2; top: -1px; left: 13%; width: 9%; min-width: 12px; max-width: 22px; height: calc(14% + var(--p, 0) * 34%); filter: drop-shadow(1px 2px 1.5px rgba(0,0,0,.5)); transition: height .2s ease-out, opacity .16s; }
+.ribbon i { display: block; height: 100%; background: linear-gradient(90deg, rgba(0,0,0,.22), rgba(255,255,255,.18) 45%, rgba(0,0,0,.14)), var(--accent); clip-path: polygon(0 0, 100% 0, 100% 100%, 50% calc(100% - 7px), 0 100%); }
+.card:hover .ribbon { height: calc(14% + var(--p, 0) * 34% + 8px); }
+.ribbon.done { height: max(23%, 52px); }
+.card:hover .ribbon.done { height: max(calc(23% + 6px), 58px); }
+.ribbon.done i { background: linear-gradient(90deg, rgba(0,0,0,.25), rgba(255,255,255,.16) 45%, rgba(0,0,0,.15)), color-mix(in srgb, var(--accent) 45%, #5d6a63); }
+.ribbon.done i::after { content: "✓"; display: block; text-align: center; color: #fff; font-size: .75rem; line-height: 1; padding-top: 30px; font-weight: 700; }
 .meta { padding: 7px 2px 0; min-width: 0; }
 /* grid view: the lip of the shelf. Each card's lip runs half a gap past its sides, so a row's lips join into one board. */
 .lib-content:not(.view-list) .meta { flex: 1; margin-inline: calc(var(--gap) / -2); padding: 11px calc(var(--gap) / 2 + 3px) 15px; background: var(--shelf); box-shadow: inset 0 1px 0 var(--shelf-hi), inset 0 -3px 0 var(--shelf-lo); }
@@ -203,7 +256,7 @@ html[data-show-tags="hover"] .card:is(:hover, :focus-visible, .selected) .tags {
 .view-list .card:hover { background: var(--bg2); }
 .view-list .cover-wrap { width: 40px; aspect-ratio: 2 / 3; box-shadow: none; }
 .view-list .card:hover .cover-wrap { transform: none; box-shadow: none; }
-.view-list .badge, .view-list .progress { display: none; }
+.view-list .badge, .view-list .progress, .view-list .ribbon { display: none; }
 .view-list .card.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .view-list .card.selected .cover-wrap { outline: 0; }
 .view-list .check { display: none; top: 50%; right: auto; left: 8px; transform: translateY(-50%); width: 24px; height: 24px; }
@@ -702,7 +755,7 @@ a.stitle:hover { color: var(--accent); text-decoration: none; }
 .pdf-page .textLayer mark.srch { background: rgba(255, 214, 64, .45); color: transparent; border-radius: 2px; }
 .pdf-page .textLayer mark.srch.cur { background: rgba(255, 140, 0, .6); outline: 2px solid rgba(255, 140, 0, .9); }
 
-@media (prefers-reduced-motion: reduce) { .cover-wrap { transition: none; } .card:hover .cover-wrap { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .cover-wrap, .ribbon, .book3d { transition: none; } .card:hover .cover-wrap, .card:hover .book3d { transform: none; } .cover-wrap::before { display: none; } .card:hover .ribbon { height: calc(14% + var(--p, 0) * 34%); } .card:hover .ribbon.done { height: max(23%, 52px); } }
 
 /* ---------- two pages: a book lying open ----------
    A shadow gathers in the gutter from both sides. The outer edges show the page block, and its two sides follow

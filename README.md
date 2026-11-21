@@ -286,6 +286,19 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   backup is for restoring. Highlights, notes and drawings aren't in it (they are in the PDFs).
 - **Settings** (gear at the bottom of the sidebar, or press `,`) controls layout, card size, cover fit, what each card shows, theme, accent
   colour, UI size, reader widths and EPUB text. It all lives in one table in `public/js/settings.js`.
+- **How a book card looks.** The cover has a creased spine with a catch of light, and behind it the book is a real
+  solid: paper edges on the right, top and bottom and a spine in the cover's own colour on the left, all drawn in 3D
+  so they turn when you tilt it. The book is thicker the more pages it has (four steps, from a booklet to a thick
+  novel). Only books on or near the screen are drawn as solids, which keeps scrolling light in big libraries; turning
+  "Page edges" off makes it lighter still. Reading progress
+  is a bookmark ribbon hanging from the top edge, longer the further you are into the book; a finished book gets
+  a short greyed ribbon with a tick. When the pointer is over a cover it lifts and the view of it shifts with the pointer, as if you moved your head: the cover
+  stays true and the side that turns away from the pointer hides its face while the opposite side comes forward (page
+  edges when the pointer is on the left, the spine when it is on the right, bottom edge when it is high, top edge when it
+  is low), with a small lean and a little shading, darker on the side turning away and lighter on the side coming forward.
+  The motion eases in when the pointer arrives and out when it leaves. At rest the page edges and top show. Settings > Library can turn the page edges and the
+  tilt off, switch the ribbon back to the old bar along the bottom, or hide progress until you hover. Tilt also
+  stays off for touch screens, the list layout and "reduce motion". It is all drawing; nothing is written to a book.
 - **Reader**: continuous vertical scroll by default, or **one page at a time (horizontal)** for PDFs and
   comics: the `M` key or the button in the top bar switches, and Settings sets the default for PDFs and
   comics separately. Each page is fitted to the window and the pages sit side by side, so you can swipe

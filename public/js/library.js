@@ -21,6 +21,47 @@ const openHref = (b) => hashFor('read', [String(b.id)]);
 /** From a folder listing, a lone comic in its own folder opens that folder (the series page); everywhere else it opens the reader. */
 const cardHref = (b, inDir) => (b.group && inDir !== null && inDir !== b.dir ? hashFor('files', dirSegments(b.dir)) : openHref(b));
 
+/** How thick the stack of page edges looks: a thin booklet to a thick novel. */
+const edgeLevel = (b) => (!b.pages ? 2 : b.pages <= 40 ? 1 : b.pages <= 160 ? 2 : b.pages <= 450 ? 3 : 4);
+/** The book as a solid: the cover in front, and behind it the fore-edge, top, bottom and spine, so tilting shows real depth.
+ *  `body` is the cover. The spine takes the cover's average colour once the picture has loaded. */
+// Only the books on (or near) the screen are drawn as solids: a library of thousands of 3D layers would make scrolling heavy.
+const farBooks = new IntersectionObserver((entries) => {
+  for (const e of entries) {
+    if (!e.target.isConnected) farBooks.unobserve(e.target);
+    else e.target.classList.toggle('far', !e.isIntersecting);
+  }
+}, { rootMargin: '200px 0px' });
+const bookBody = (book, body) => {
+  const stage = h('div', { class: 'book-stage', dataset: { edge: edgeLevel(book) } }, h('div', { class: 'book3d' }, body, ...['right', 'top', 'bottom', 'left'].map((side) => h('i', { class: `face ${side}`, 'aria-hidden': 'true' }))));
+  const img = body.querySelector('img');
+  if (img) img.addEventListener('load', () => spineColour(img, stage), { once: true });
+  farBooks.observe(stage);
+  return stage;
+};
+/** Average colour of the cover, darkened: the spine. Skipped quietly if the picture can't be read. */
+function spineColour(img, stage) {
+  try {
+    const c = document.createElement('canvas');
+    c.width = c.height = 4;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(img, 0, 0, 4, 4);
+    const d = g.getImageData(0, 0, 4, 4).data;
+    let r = 0, gr = 0, b = 0;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; gr += d[i + 1]; b += d[i + 2]; }
+    const n = d.length / 4;
+    stage.style.setProperty('--spine', `rgb(${Math.round(r / n)} ${Math.round(gr / n)} ${Math.round(b / n)})`);
+  } catch { /* keeps the default spine */ }
+}
+/** The reading mark on a cover: a bar along the bottom and a bookmark ribbon hanging from the top (Settings chooses which shows). */
+const progressMarks = (pct) => {
+  if (!pct) return [];
+  const done = pct >= 98 ? ' done' : '';
+  return [
+    h('div', { class: 'progress' + done }, h('i', { style: { width: `${pct}%` } })),
+    h('div', { class: 'ribbon' + done, style: `--p:${pct / 100}`, 'aria-hidden': 'true' }, h('i')),
+  ];
+};
 const finishedPct = (b) => Math.round(progressFraction(b) * 100);
 
 /** Builds the books query for a route, plus a heading. */
@@ -507,7 +548,7 @@ export function createLibraryView(route) {
           more.click();
         },
       },
-      h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), book.pages ? h('span', { class: 'badge pg' }, `${book.format === 'epub' ? '~' : ''}${book.pages} p`) : null, check, more, isList ? unlist : null, pct ? h('div', { class: 'progress' + (pct >= 98 ? ' done' : '') }, h('i', { style: { width: `${pct}%` } })) : null),
+      bookBody(book, h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), book.pages ? h('span', { class: 'badge pg' }, `${book.format === 'epub' ? '~' : ''}${book.pages} p`) : null, check, more, isList ? unlist : null, progressMarks(pct))),
       h(
         'div',
         { class: 'meta' },
@@ -592,7 +633,7 @@ export function createLibraryView(route) {
           h('div', { class: 'cover' }, h('div', { class: 'ph', style: { background: `hsl(${hueOf(d.name)} 32% 26%)` } }, h('span', null, initials(d.name))), img),
           h('span', { class: 'badge fmt' }, `×${info.units}`),
           more,
-          pct ? h('div', { class: 'progress' + (pct >= 98 ? ' done' : '') }, h('i', { style: { width: `${pct}%` } })) : null,
+          progressMarks(pct),
         ),
       ),
       h('div', { class: 'meta' }, h('div', { class: 'title' }, d.name), h('div', { class: 'sub' }, `${groupCount(info)}${info.matched != null && info.matched < info.units ? `, ${info.matched} ${isAdded ? 'new' : 'match'}` : ''}${info.done ? `, ${info.done} read` : pct ? `, ${pct}%` : ''}`)),
