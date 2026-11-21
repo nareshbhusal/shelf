@@ -7,6 +7,8 @@ const fine = matchMedia('(hover: hover)');
 let current = null;
 let frame = 0;
 let settle = 0;
+let rect = null; // where the book is, measured once per visit instead of on every mouse move (scrolling or resizing, or the first moments of a visit, measure it again)
+let last = '';
 
 function release() {
   if (!current) return;
@@ -16,27 +18,33 @@ function release() {
   for (const v of ['--vx', '--vy', '--dr', '--dl', '--db', '--dt', '--ll', '--lr', '--lt', '--lb']) current.style.removeProperty(v);
   clearTimeout(settle);
   current = null;
+  rect = null;
+  last = '';
 }
 
 export function startTilt() {
   document.addEventListener('pointermove', (e) => {
     if (e.pointerType !== 'mouse' || !settings.cardTilt || calm.matches || !fine.matches) return release();
     const wrap = e.target instanceof Element ? e.target.closest('.book-stage, .series-stack') : null;
-    if (!wrap || wrap.closest('.view-list') || wrap.querySelector('.cover-wrap.flipping')) return release();
+    if (!wrap || wrap.closest('.view-list')) return release();
     if (current && current !== wrap) release();
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(() => {
-      const r = wrap.getBoundingClientRect();
+      if (current !== wrap) rect = null;
+      const r = (rect ??= wrap.getBoundingClientRect());
       const x = (e.clientX - r.left) / r.width;
       const y = (e.clientY - r.top) / r.height;
       if (current !== wrap) {
         // the first moments over a book ease into the pose instead of snapping to wherever the pointer came in
         wrap.classList.add('entering');
         clearTimeout(settle);
-        settle = setTimeout(() => wrap.classList.remove('entering'), 450);
+        settle = setTimeout(() => { wrap.classList.remove('entering'); rect = null; }, 450);
       }
       current = wrap;
       wrap.classList.add('tilting');
+      const key = `${(x * 60) | 0},${(y * 60) | 0}`; // sixty steps across the cover are finer than the eye can tell apart
+      if (key === last) return;
+      last = key;
       wrap.style.setProperty('--ry', `${((x - 0.5) * 5).toFixed(2)}deg`);
       wrap.style.setProperty('--rx', `${((0.5 - y) * 4).toFixed(2)}deg`);
       // The camera goes the way the book turns away from it: pointer right = right side recedes = the spine comes forward (camera left of
@@ -57,6 +65,9 @@ export function startTilt() {
       }
     });
   });
+  const remeasure = () => { rect = null; };
+  window.addEventListener('scroll', remeasure, { capture: true, passive: true });
+  window.addEventListener('resize', remeasure, { passive: true });
   document.addEventListener('pointerleave', release);
   window.addEventListener('blur', release);
 }

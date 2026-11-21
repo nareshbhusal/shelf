@@ -123,6 +123,8 @@ CREATE TABLE IF NOT EXISTS books (
 );
 CREATE INDEX IF NOT EXISTS books_dir ON books(dir);
 CREATE INDEX IF NOT EXISTS books_fp ON books(fingerprint);
+-- The average colour of each saved cover (it becomes the book's spine on the shelf). Worked out once, when the cover is made.
+CREATE TABLE IF NOT EXISTS cover_colour (fingerprint TEXT PRIMARY KEY, rgb TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS tags (
   id    INTEGER PRIMARY KEY,

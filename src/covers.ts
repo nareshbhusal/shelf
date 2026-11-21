@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import sharp from 'sharp';
 import * as mupdf from 'mupdf';
 import { LIBRARY_DIR, THUMB_DIR } from './config.js';
-import type { BookRow } from './db.js';
+import { db, type BookRow } from './db.js';
 import { epubInfo } from './meta.js';
 import { semaphore } from './util.js';
 import { comicPages, readEntry } from './zip.js';
@@ -16,6 +16,25 @@ const THUMB_WIDTH = 400;
 sharp.concurrency(2);
 const limit = semaphore(3); // thumbnails are CPU-heavy; don't spawn 100 pdftoppm at once
 const inflight = new Map<string, Promise<string | null>>();
+
+/** Spine colours, by fingerprint: the average of the cover, worked out once and kept (DB table `cover_colour`, in the data folder). */
+const colours = new Map<string, string>((db.prepare('SELECT fingerprint, rgb FROM cover_colour').all() as Array<{ fingerprint: string; rgb: string }>).map((r) => [r.fingerprint, r.rgb]));
+export const spineColour = (fingerprint: string): string | undefined => colours.get(fingerprint);
+async function rememberColour(fingerprint: string, thumb: string): Promise<void> {
+  try {
+    const { data } = await sharp(thumb, { failOn: 'none' }).resize(4, 4, { fit: 'fill' }).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    let r = 0, g = 0, b = 0;
+    for (let i = 0; i + 2 < data.length; i += 3) { r += data[i]; g += data[i + 1]; b += data[i + 2]; }
+    const n = Math.max(1, data.length / 3);
+    const rgb = `${Math.round(r / n)} ${Math.round(g / n)} ${Math.round(b / n)}`;
+    colours.set(fingerprint, rgb);
+    db.prepare('INSERT OR REPLACE INTO cover_colour (fingerprint, rgb) VALUES (?, ?)').run(fingerprint, rgb);
+  } catch { /* the spine keeps its default colour */ }
+}
+function forgetColour(fingerprint: string): void {
+  colours.delete(fingerprint);
+  db.prepare('DELETE FROM cover_colour WHERE fingerprint = ?').run(fingerprint);
+}
 
 const exists = (p: string) => fs.access(p).then(() => true, () => false);
 
@@ -36,7 +55,10 @@ export function ensureThumb(book: BookRow): Promise<string | null> {
 async function build(book: BookRow): Promise<string | null> {
   const out = path.join(THUMB_DIR, `${book.fingerprint}.jpg`);
   const none = `${out}.none`; // "tried and failed" marker, so broken files aren't retried on every page load
-  if (await exists(out)) return out;
+  if (await exists(out)) {
+    if (!colours.has(book.fingerprint)) await rememberColour(book.fingerprint, out); // a cover made before spine colours were kept
+    return out;
+  }
   if (await exists(none)) return null;
 
   const abs = path.join(LIBRARY_DIR, book.path);
@@ -54,6 +76,7 @@ async function build(book: BookRow): Promise<string | null> {
         .toFile(tmp);
     }
     await fs.rename(tmp, out);
+    await rememberColour(book.fingerprint, out);
     return out;
   } catch (e) {
     await fs.rm(tmp, { force: true });
@@ -108,12 +131,14 @@ export async function setThumb(book: BookRow, image: Buffer): Promise<void> {
   await sharp(image).resize({ width: THUMB_WIDTH * 2, withoutEnlargement: true }).jpeg({ quality: 85 }).toFile(tmp);
   await fs.rename(tmp, out);
   await fs.rm(`${out}.none`, { force: true });
+  await rememberColour(book.fingerprint, out);
 }
 
 /** Throw away a book's saved cover (and the notes about it) so the next request makes it again from the file. */
 export async function forgetThumb(book: BookRow): Promise<void> {
   const out = path.join(THUMB_DIR, `${book.fingerprint}.jpg`);
   await Promise.all([out, `${out}.none`].map((f) => fs.rm(f, { force: true })));
+  forgetColour(book.fingerprint);
 }
 
 /** Throw away every saved cover (they are only a cache); each is made again on demand. Returns how many there were. */
@@ -124,6 +149,8 @@ export async function forgetAllThumbs(): Promise<number> {
     await fs.rm(path.join(THUMB_DIR, name), { force: true });
     if (name.endsWith('.jpg')) n++;
   }
+  colours.clear();
+  db.exec('DELETE FROM cover_colour');
   return n;
 }
 

@@ -1,9 +1,10 @@
 import { coverUrl } from './api.js';
 import { h, icon } from './util.js';
 
-// Flipping through a book on its card, without opening the reader. The cover turns like the cover of a book and the pages follow, one
-// at a time. Pages are small pictures the server draws on request (PDF and comic files; an EPUB has no fixed pages). Nothing is saved:
-// not your place, not the pictures. Open in the reader (Enter, or the button) to carry on from the page you are looking at.
+// Flipping through a book from its card, without opening the reader. The book lifts out of the shelf into a larger pane in front of it (the
+// card stays where it is), its cover opens and the pages follow, one at a time, big enough to read. Pages are pictures the server draws on
+// request (PDF and comic files; an EPUB has no fixed pages). Nothing is saved: not your place, not the pictures. Open in the reader
+// (Enter, or the button) to carry on from the page you are looking at.
 
 export const canFlip = (book) => (book.format === 'pdf' || book.format === 'cbz') && !book.isFolder && book.pages > 1;
 
@@ -14,14 +15,18 @@ export function closeFlip(animate = false) {
 }
 
 /**
- * @param {HTMLElement} wrap  the .cover-wrap of the card
+ * @param {HTMLElement} wrap  the .cover-wrap of the card (where the book lifts from and settles back to)
  * @param {object} book
  * @param {{ open: (page: number) => void }} cb
  */
 export function openFlip(wrap, book, { open }) {
   if (active) active.close(false);
   const total = book.pages;
-  const px = Math.min(700, Math.max(240, Math.ceil((wrap.clientWidth * (window.devicePixelRatio || 1)) / 40) * 40));
+  const dpr = window.devicePixelRatio || 1;
+  const coverImg = wrap.querySelector('img');
+  let ar = coverImg?.naturalWidth && coverImg?.naturalHeight ? coverImg.naturalWidth / coverImg.naturalHeight : 0.7; // the shape of one page
+  ar = Math.min(1.6, Math.max(0.45, ar));
+  let px = 0;
   const url = (n) => (n === 0 ? coverUrl(book) : `/api/books/${book.id}/peek/${n}?w=${px}&v=${book.fingerprint}`);
 
   // Pictures already fetched, so turning back is instant. Resolves to the <img>, or null when the page can't be drawn.
@@ -37,7 +42,7 @@ export function openFlip(wrap, book, { open }) {
       img.src = url(n);
       p = img.decode().then(() => img, () => null);
       pics.set(n, p);
-      if (pics.size > 14) pics.delete(pics.keys().next().value);
+      if (pics.size > 12) pics.delete(pics.keys().next().value);
     }
     return p;
   };
@@ -55,13 +60,53 @@ export function openFlip(wrap, book, { open }) {
   const base = h('div', { class: 'flip-page is-cover' });
   const num = h('span', { class: 'flip-num' });
   const range = h('input', { type: 'range', min: 1, max: total, value: 1, 'aria-label': 'Page', onInput: () => (num.textContent = `${range.value} / ${total}`), onChange: () => go(Number(range.value)) });
-  const stop = (e) => e.stopPropagation();
-  const closeBtn = h('button', { class: 'flip-btn flip-close', title: 'Close (Esc)', 'aria-label': 'Close', onClick: (e) => { e.preventDefault(); e.stopPropagation(); close(true); } }, icon('x', 14));
-  const openBtn = h('button', { class: 'flip-btn flip-open', title: 'Open in the reader at this page (Enter)', 'aria-label': 'Open in the reader', onClick: (e) => { e.preventDefault(); e.stopPropagation(); toReader(); } }, icon('arrow-up-right', 14));
-  const pane = h('div', { class: 'flip', role: 'group', 'aria-label': 'Flip through this book' }, base, openBtn, closeBtn, h('div', { class: 'flip-bar', onClick: stop }, num, range));
-  wrap.append(pane);
-  wrap.classList.add('flipping');
-  wrap.closest('.card')?.classList.add('flipping-card');
+  const pane = h('div', { class: 'flip', role: 'group', 'aria-label': 'Flip through this book' }, base);
+  const bar = h(
+    'div',
+    { class: 'flip-bar' },
+    num,
+    range,
+    h('button', { class: 'flip-btn', title: 'Open in the reader at this page (Enter)', onClick: () => toReader() }, icon('arrow-up-right', 14), 'Open in reader'),
+    h('button', { class: 'flip-btn icon', title: 'Close (Esc)', 'aria-label': 'Close', onClick: () => close(true) }, icon('x', 14)),
+  );
+  const stage = h('div', { class: 'flip-stage' }, pane, bar);
+  const layer = h('div', { class: 'flip-layer' }, stage);
+  document.body.append(layer);
+
+  /** Fits the pane to the window: as tall as it can be, in the shape of the book's pages. */
+  function fit() {
+    const barH = 54;
+    let H = Math.min(window.innerHeight * 0.88 - barH, 1100);
+    let W = H * ar;
+    if (W > window.innerWidth * 0.94) { W = window.innerWidth * 0.94; H = W / ar; }
+    pane.style.width = `${Math.round(W)}px`;
+    pane.style.height = `${Math.round(H)}px`;
+    pane.style.perspective = `${Math.round(W * 2.2)}px`;
+    bar.style.width = `${Math.round(W)}px`;
+    const want = Math.min(1400, Math.max(320, Math.ceil((W * dpr) / 40) * 40));
+    if (!px) px = want; // the pictures are asked for at this size; a bigger window later just scales them
+    return { W, H };
+  }
+  const onResize = () => fit();
+  window.addEventListener('resize', onResize);
+  fit();
+
+  /** The book travels between its place on the shelf and the front: the pane is drawn over the cover and eased out to full size. */
+  function lift(out) {
+    const a = wrap.getBoundingClientRect();
+    const b = pane.getBoundingClientRect();
+    const dx = a.left + a.width / 2 - (b.left + b.width / 2);
+    const dy = a.top + a.height / 2 - (b.top + b.height / 2);
+    const s = Math.min(a.width / b.width, a.height / b.height);
+    const from = `translate(${dx}px, ${dy}px) scale(${s})`;
+    if (!out) stage.style.transform = from;
+    stage.classList.toggle('lifted', !out);
+    stage.getBoundingClientRect();
+    stage.style.transition = 'transform 320ms cubic-bezier(.2, .7, .2, 1)';
+    layer.classList.toggle('shown', !out);
+    stage.style.transform = out ? from : 'none';
+    return new Promise((r) => setTimeout(r, 340));
+  }
 
   function toReader() {
     const page = Math.max(1, pos);
@@ -100,7 +145,7 @@ export function openFlip(wrap, book, { open }) {
         if (pos === 0 || goal === 0 || gap <= 4) {
           // the cover opening or closing is one turn; a few pages away is a quick run of turns
           const next = pos === 0 || goal === 0 ? goal : pos + Math.sign(goal - pos);
-          await turn(pos, next, next === goal && gap <= 1 ? 520 : 220);
+          await turn(pos, next, next === goal && gap <= 1 ? 560 : 240);
           pos = next;
         } else {
           pos = goal; // far away (the slider): no turning, just the page
@@ -127,14 +172,11 @@ export function openFlip(wrap, book, { open }) {
     wheelAt = now;
     go(target + (e.deltaY + e.deltaX > 0 ? 1 : -1));
   };
-  pane.addEventListener('wheel', onWheel, { passive: false });
+  layer.addEventListener('wheel', onWheel, { passive: false });
 
   let down = null;
   pane.addEventListener('pointerdown', (e) => { down = { x: e.clientX, y: e.clientY }; });
   pane.addEventListener('click', (e) => {
-    // The card is a link: nothing in here may follow it.
-    e.preventDefault();
-    e.stopPropagation();
     if (down && Math.hypot(e.clientX - down.x, e.clientY - down.y) > 30) {
       go(target + (e.clientX < down.x ? 1 : -1)); // a swipe
       return;
@@ -142,56 +184,52 @@ export function openFlip(wrap, book, { open }) {
     const r = pane.getBoundingClientRect();
     go(target + (e.clientX - r.left < r.width * 0.35 ? -1 : 1));
   });
-  pane.addEventListener('dblclick', (e) => { e.preventDefault(); e.stopPropagation(); });
+  // a click on the dimmed shelf around the book puts it back
+  layer.addEventListener('pointerdown', (e) => { if (!stage.contains(e.target)) close(true); });
 
   const onKey = (e) => {
-    if (!pane.isConnected) return close(false); // the list was redrawn under us
+    if (!pane.isConnected) return close(false);
     if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target instanceof HTMLInputElement && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) return; // the scrubber's own arrows
     const k = e.key;
     let handled = true;
     if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || k === ' ') go(target + 1);
     else if (k === 'ArrowLeft' || k === 'ArrowUp' || k === 'PageUp' || k === 'Backspace') go(target - 1);
     else if (k === 'Home') go(1);
     else if (k === 'End') go(total);
-    else if (k === 'Enter') toReader();
+    else if (k === 'Enter' && !(e.target instanceof HTMLButtonElement)) toReader();
     else if (k === 'Escape') close(true);
     else handled = false;
     if (handled) { e.preventDefault(); e.stopImmediatePropagation(); }
   };
-  const onOutside = (e) => {
-    if (!pane.isConnected) return close(false);
-    if (pane.contains(e.target) || e.target.closest?.('.flipbtn')) return; // the card's own button decides for itself
-    close(true);
-    if (e.target.closest?.('.card')) {
-      // a click that only meant "put it away" shouldn't also open another book
-      const eat = (c) => { c.preventDefault(); c.stopPropagation(); };
-      document.addEventListener('click', eat, { capture: true, once: true });
-      setTimeout(() => document.removeEventListener('click', eat, true), 600);
-    }
-  };
   document.addEventListener('keydown', onKey, true);
-  document.addEventListener('pointerdown', onOutside, true);
+  const onHash = () => close(false); // the page changed under us (back button, a link): the book goes away with it
+  window.addEventListener('hashchange', onHash);
 
   async function close(animate) {
     if (leaving) return;
     leaving = true;
     document.removeEventListener('keydown', onKey, true);
-    document.removeEventListener('pointerdown', onOutside, true);
+    window.removeEventListener('resize', onResize);
+    window.removeEventListener('hashchange', onHash);
     if (active === handle) active = null;
-    if (animate && pos > 0 && pane.isConnected) {
-      target = 0; // the cover swings shut over the page
-      await run();
+    if (animate && wrap.isConnected) {
+      if (pos > 0 && pane.isConnected) {
+        target = 0; // the cover swings shut over the page
+        await run();
+      }
+      await lift(true);
     }
-    pane.remove();
-    wrap.classList.remove('flipping');
-    wrap.closest('.card')?.classList.remove('flipping-card');
+    layer.remove();
   }
   const handle = { close };
   active = handle;
 
-  // The cover is on show; it swings open on the page you were at (or the first one).
-  show(0, base).then(() => {
+  // The cover comes forward from the shelf, then swings open on the page you were at (or the first one).
+  show(0, base).then(async () => {
     ui();
+    await lift(false);
+    if (leaving) return;
     const at = book.progress?.page > 0 && book.progress.page <= total ? book.progress.page : 1;
     go(at);
   });

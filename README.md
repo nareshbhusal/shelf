@@ -305,14 +305,20 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   tilt, tilt shading, cover shadow, blurred badges, ribbon shadow, and card transitions. The progress style
   (ribbon, bar, or only on hover) is in Settings > Library. If scrolling or hovering feels heavy on a big library or an
   older machine, start with "Books as solids", then tilt.
-- **Flip through a book on its card.** Hover a PDF or comic card and press the pages button on the cover (or use
-  "Flip through" in the card's menu) to leaf through it without opening the reader: the cover opens in place and
-  pages turn with a 3D leaf. It starts at the page you stopped on. `→` `←`, a click on the right or left half, the mouse
-  wheel, or the scrubber along the bottom turn pages; `Home`/`End` jump; `Enter` or the arrow button opens the reader at
-  that page; `Esc`, the close button or a click elsewhere puts the book back. Pages are drawn on the server one at a
-  time at card size and kept in a small cache, so nothing is saved or written, and your reading position is not changed.
-  EPUBs can't be flipped (their pages only exist once laid out in the reader) and neither can PDFs over 120 MB. Turn
-  it off in Settings > Card effects.
+- **Flip through a book from its card.** Hover a PDF or comic card and press the pages button on the cover (or use
+  "Flip through" in the card's menu) to leaf through it without opening the reader. The book lifts out of the shelf into
+  a large pane in front of it (the shelf dims behind, and the card's own cover stays where it was), so the pages are big
+  enough to read. The cover opens and it starts at the page you stopped on. `→` `←`, a click on the right or left of the
+  page, the mouse wheel, or the scrubber beneath turn pages (with a 3D leaf); `Home`/`End` jump; `Enter` or "Open in reader"
+  carries on in the reader at that page; `Esc`, the close button or a click on the dimmed shelf puts the book back. Pages
+  are drawn on the server one at a time, at the size of the pane, and kept in a small cache, so nothing is saved or written, and
+  your reading position is not changed. EPUBs can't be flipped (their pages only exist once laid out in the reader) and
+  neither can PDFs over 120 MB. Turn it off in Settings > Card effects.
+- **Work done once.** A cover's spine colour (its average colour) is worked out on the server when the cover is first
+  made and kept in the data folder's database (table `cover_colour`; nothing in the library), so the shelf gets it with the book
+  list instead of every card reading the picture's pixels each time it is drawn. It is dropped and made again when a cover is
+  rebuilt or replaced. While a book has no colour yet the page measures it once and remembers it until the next load. The
+  tilt measures a book once per visit rather than on every mouse move.
 - **Reader**: continuous vertical scroll by default, or **one page at a time (horizontal)** for PDFs and
   comics: the `M` key or the button in the top bar switches, and Settings sets the default for PDFs and
   comics separately. Each page is fitted to the window and the pages sit side by side, so you can swipe

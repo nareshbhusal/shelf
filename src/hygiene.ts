@@ -13,6 +13,7 @@ export async function gcThumbs(): Promise<number> {
   const keep = new Set(
     (db.prepare('SELECT DISTINCT fingerprint FROM books').all() as Array<{ fingerprint: string }>).map((r) => r.fingerprint),
   );
+  db.prepare('DELETE FROM cover_colour WHERE fingerprint NOT IN (SELECT fingerprint FROM books)').run();
   let removed = 0;
   let names: string[];
   try {

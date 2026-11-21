@@ -56,7 +56,7 @@ export class PeekError extends Error {
 }
 
 export function peekPage(book: BookRow, n: number, width: number): Promise<Buffer> {
-  const w = Math.min(900, Math.max(160, Math.round(width / 40) * 40 || 480));
+  const w = Math.min(1400, Math.max(160, Math.round(width / 40) * 40 || 480));
   const key = `${book.fingerprint}:${n}:${w}`;
   const hit = recent.get(key);
   if (hit) return Promise.resolve(hit);

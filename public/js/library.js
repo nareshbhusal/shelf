@@ -1,5 +1,5 @@
 import { api, coverUrl, fileUrl, refreshCover } from './api.js';
-import { canFlip, closeFlip, openFlip } from './flip.js';
+import { canFlip, openFlip } from './flip.js';
 import { chip, openBookInfo, openListPicker, openTagPicker } from './dialogs.js';
 import { openWithMenu, readerMenuItems } from './openwith.js';
 import { openRename } from './rename.js';
@@ -39,15 +39,18 @@ const farBooks = new IntersectionObserver((entries) => {
     else e.target.classList.toggle('far', !e.isIntersecting);
   }
 }, { rootMargin: '200px 0px' });
+const sampled = new Map(); // spine colours worked out in this page for books the server has no colour for yet: once each, not on every redraw
 const bookBody = (book, body) => {
-  const stage = h('div', { class: 'book-stage', style: bulkStyle(book) }, h('div', { class: 'book3d' }, body, ...['right', 'top', 'bottom', 'left'].map((side) => h('i', { class: `face ${side}`, 'aria-hidden': 'true' }))));
+  const known = book.spine ? `rgb(${book.spine})` : sampled.get(book.fingerprint); // the server works the colour out once, when it makes the cover
+  const style = bulkStyle(book) + (known ? `; --spine: ${known}` : '');
+  const stage = h('div', { class: 'book-stage', style }, h('div', { class: 'book3d' }, body, ...['right', 'top', 'bottom', 'left'].map((side) => h('i', { class: `face ${side}`, 'aria-hidden': 'true' }))));
   const img = body.querySelector('img');
-  if (img && settings.pageEdge && settings.spineColour) img.addEventListener('load', () => spineColour(img, stage), { once: true });
+  if (!known && img && settings.pageEdge && settings.spineColour) img.addEventListener('load', () => spineColour(img, stage, book.fingerprint), { once: true });
   farBooks.observe(stage);
   return stage;
 };
-/** Average colour of the cover, darkened: the spine. Skipped quietly if the picture can't be read. */
-function spineColour(img, stage) {
+/** Average colour of the cover: the spine. Only for a cover the server hasn't measured yet (it is in the book list from the next load on). */
+function spineColour(img, stage, key) {
   try {
     const c = document.createElement('canvas');
     c.width = c.height = 4;
@@ -57,7 +60,9 @@ function spineColour(img, stage) {
     let r = 0, gr = 0, b = 0;
     for (let i = 0; i < d.length; i += 4) { r += d[i]; gr += d[i + 1]; b += d[i + 2]; }
     const n = d.length / 4;
-    stage.style.setProperty('--spine', `rgb(${Math.round(r / n)} ${Math.round(gr / n)} ${Math.round(b / n)})`);
+    const rgb = `rgb(${Math.round(r / n)} ${Math.round(gr / n)} ${Math.round(b / n)})`;
+    sampled.set(key, rgb);
+    stage.style.setProperty('--spine', rgb);
   } catch { /* keeps the default spine */ }
 }
 /** The reading mark on a cover: a bar along the bottom and a bookmark ribbon hanging from the top (Settings chooses which shows). */
@@ -510,7 +515,6 @@ export function createLibraryView(route) {
       : null;
     const flipHere = () => {
       const wrap = card.querySelector('.cover-wrap');
-      if (wrap.classList.contains('flipping')) return closeFlip(true);
       const to = (page) => { const href = openHref(book); location.hash = `${href}${href.includes('?') ? '&' : '?'}page=${page}`; };
       openFlip(wrap, book, { open: to });
     };

@@ -4,7 +4,7 @@ import express, { type NextFunction, type Request, type Response } from 'express
 import { DATA_DIR, HOST, HOST_LIBRARY, IN_DOCKER, LIBRARY_DIR, OPENER_SOCKET, PDFJS_DIR, PORT, READONLY, ROOT, SESSIONS_CMD, SHELF_NAME } from './config.js';
 import { AUTH_ON, authGate } from './auth.js';
 import { PeekError, peekPage } from './peek.js';
-import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb } from './covers.js';
+import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb, spineColour } from './covers.js';
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
@@ -155,6 +155,7 @@ function bookDTO(b: BookX, tags: Map<number, number[]>, singles: Map<string, str
     number: b.number,
     pages: b.pages,
     fingerprint: b.fingerprint,
+    spine: spineColour(b.fingerprint),
     addedAt: b.added_at,
     progress: { page: b.progress_page, at: b.progress_at, pos: b.progress_pos, frac: b.progress_frac },
     tagIds: tags.get(b.id) ?? [],
