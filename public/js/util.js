@@ -42,6 +42,8 @@ const ICONS = {
   grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/>',
   rows: '<path d="M3 5h18M3 12h18M3 19h18"/>',
   x: '<path d="M6 6l12 12M18 6 6 18"/>',
+  pages: '<path d="M12 6c-2-1.5-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13c-3-.5-6 0-8 1.5zM12 6v13"/>',
+  'arrow-up-right': '<path d="M7 17 17 7M9 7h8v8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',

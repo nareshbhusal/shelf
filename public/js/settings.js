@@ -48,8 +48,6 @@ const SCHEMA = [
       { key: 'cardGap', label: 'Card gap', type: 'range', min: 4, max: 40, step: 2, unit: 'px', default: 16 },
       { key: 'coverFit', label: 'Cover fit', type: 'select', options: [['cover', 'Fill (crop)'], ['contain', 'Fit (letterbox)']], default: 'cover' },
       { key: 'coverRatio', label: 'Cover shape', type: 'select', options: [['2 / 3', 'Portrait 2:3'], ['3 / 4', 'Portrait 3:4'], ['1 / 1', 'Square']], default: '2 / 3' },
-      { key: 'pageEdge', label: 'Page edges on covers (thicker for longer books)', type: 'checkbox', default: true },
-      { key: 'cardTilt', label: 'Tilt covers toward the pointer', type: 'checkbox', default: true },
       { key: 'titleLines', label: 'Title lines', type: 'select', options: [['1', '1'], ['2', '2'], ['3', '3']], default: '2' },
       { key: 'groupComics', label: 'Multi-part series as one card (folders with several comics)', type: 'checkbox', default: true },
       { key: 'showAuthor', label: 'Author / folder line', type: 'select', options: SHOW, default: 'always' },
@@ -58,6 +56,22 @@ const SCHEMA = [
       { key: 'showTags', label: 'Tags on cards', type: 'select', options: SHOW, default: 'never' },
       { key: 'progressStyle', label: 'Reading progress shown as', type: 'select', options: [['ribbon', 'Bookmark ribbon'], ['bar', 'Bar along the bottom']], default: 'ribbon' },
       { key: 'showProgress', label: 'Reading progress', type: 'select', options: [['always', 'Always'], ['unfinished', 'Until finished'], ['hover', 'On hover'], ['never', 'Never']], default: 'always' },
+    ],
+  },
+  {
+    // Each of these draws something extra on every card. On a big library or an old computer, turn off what you can live without
+    // (page edges and shadows cost the most while scrolling; tilt and shading only work while the pointer is on a book).
+    group: 'Card effects',
+    items: [
+      { key: 'pageEdge', label: 'Books as solids: page edges, spine, thickness (heaviest)', type: 'checkbox', default: true },
+      { key: 'spineColour', label: 'Spine takes the cover\'s colour', type: 'checkbox', default: true },
+      { key: 'cardTilt', label: 'Tilt covers toward the pointer', type: 'checkbox', default: true },
+      { key: 'cardShade', label: 'Shading that follows the tilt', type: 'checkbox', default: true },
+      { key: 'coverShadow', label: 'Shadows under covers', type: 'checkbox', default: true },
+      { key: 'badgeBlur', label: 'Frosted format and page badges', type: 'checkbox', default: true },
+      { key: 'ribbonShadow', label: 'Shadow under bookmark ribbons', type: 'checkbox', default: true },
+      { key: 'cardMotion', label: 'Animated card motion (lift, ease, ribbon growth)', type: 'checkbox', default: true },
+      { key: 'flipPeek', label: 'Flip through books on their cards', type: 'checkbox', default: true },
     ],
   },
   {
@@ -195,6 +209,7 @@ export function applySettings() {
   for (const k of CARD_PARTS) root.dataset[k] = s[k] = cardPart(k, s[k]);
   root.dataset.pageEdge = s.pageEdge ? '1' : '0';
   root.dataset.cardTilt = s.cardTilt ? '1' : '0';
+  for (const k of ['spineColour', 'cardShade', 'coverShadow', 'badgeBlur', 'ribbonShadow', 'cardMotion', 'flipPeek']) root.dataset[k] = s[k] ? '1' : '0';
   root.dataset.progressStyle = s.progressStyle;
   root.dataset.showFolios = s.showFolios ? '1' : '0';
   const set = (k, v) => root.style.setProperty(k, v);

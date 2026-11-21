@@ -3,6 +3,7 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { DATA_DIR, HOST, HOST_LIBRARY, IN_DOCKER, LIBRARY_DIR, OPENER_SOCKET, PDFJS_DIR, PORT, READONLY, ROOT, SESSIONS_CMD, SHELF_NAME } from './config.js';
 import { AUTH_ON, authGate } from './auth.js';
+import { PeekError, peekPage } from './peek.js';
 import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb } from './covers.js';
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
@@ -540,6 +541,20 @@ app.post('/api/books/:id/cover/rebuild', async (req, res) => {
   const book = getBook(req.params.id);
   await forgetThumb(book);
   res.json({ ok: true, cover: !!(await ensureThumb(book)) });
+});
+
+// One page, small, for flipping through a book on its card. The URL carries the file's fingerprint, so browsers may keep it.
+app.get('/api/books/:id/peek/:n', async (req, res) => {
+  const book = getBook(req.params.id);
+  try {
+    const img = await peekPage(book, toInt(req.params.n), Number(req.query.w) || 480);
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'private, max-age=86400');
+    res.send(img);
+  } catch (e) {
+    if (e instanceof PeekError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
 });
 
 app.get('/api/books/:id/pages', async (req, res) => {

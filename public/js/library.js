@@ -1,4 +1,5 @@
 import { api, coverUrl, fileUrl, refreshCover } from './api.js';
+import { canFlip, closeFlip, openFlip } from './flip.js';
 import { chip, openBookInfo, openListPicker, openTagPicker } from './dialogs.js';
 import { openWithMenu, readerMenuItems } from './openwith.js';
 import { openRename } from './rename.js';
@@ -41,7 +42,7 @@ const farBooks = new IntersectionObserver((entries) => {
 const bookBody = (book, body) => {
   const stage = h('div', { class: 'book-stage', style: bulkStyle(book) }, h('div', { class: 'book3d' }, body, ...['right', 'top', 'bottom', 'left'].map((side) => h('i', { class: `face ${side}`, 'aria-hidden': 'true' }))));
   const img = body.querySelector('img');
-  if (img) img.addEventListener('load', () => spineColour(img, stage), { once: true });
+  if (img && settings.pageEdge && settings.spineColour) img.addEventListener('load', () => spineColour(img, stage), { once: true });
   farBooks.observe(stage);
   return stage;
 };
@@ -507,6 +508,15 @@ export function createLibraryView(route) {
     const unlist = isList
       ? h('button', { class: 'unlist', title: 'Remove from this list', 'aria-label': 'Remove from this list', onClick: (e) => { e.preventDefault(); e.stopPropagation(); removeFromList([book.id]); } }, icon('x', 14))
       : null;
+    const flipHere = () => {
+      const wrap = card.querySelector('.cover-wrap');
+      if (wrap.classList.contains('flipping')) return closeFlip(true);
+      const to = (page) => { const href = openHref(book); location.hash = `${href}${href.includes('?') ? '&' : '?'}page=${page}`; };
+      openFlip(wrap, book, { open: to });
+    };
+    const flipBtn = canFlip(book)
+      ? h('button', { class: 'flipbtn', title: 'Flip through', 'aria-label': 'Flip through this book', onClick: (e) => { e.preventDefault(); e.stopPropagation(); flipHere(); } }, icon('pages', 15))
+      : null;
     const more = h(
       'button',
       {
@@ -518,6 +528,7 @@ export function createLibraryView(route) {
           e.stopPropagation();
           popMenu(e.currentTarget, [
             { label: 'Open', onClick: () => (location.hash = cardHref(book, inDir)) },
+            canFlip(book) && settings.flipPeek ? { label: 'Flip through', onClick: flipHere } : null,
             { label: 'Details', onClick: () => openBookInfo(book, { onChange: () => { replaceCard(book); } }) },
             { label: 'Tags…', onClick: () => openTagPicker([book], { onChange: afterEdit(() => [book]) }) },
             { label: 'Add to reading list…', onClick: () => openListPicker([book], { onChange: afterEdit(() => [book]) }) },
@@ -554,7 +565,7 @@ export function createLibraryView(route) {
           more.click();
         },
       },
-      bookBody(book, h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), book.pages ? h('span', { class: 'badge pg' }, `${book.format === 'epub' ? '~' : ''}${book.pages} p`) : null, check, more, isList ? unlist : null, progressMarks(pct))),
+      bookBody(book, h('div', { class: 'cover-wrap' }, coverEl(book), h('span', { class: 'badge fmt' }, book.format.toUpperCase()), book.pages ? h('span', { class: 'badge pg' }, `${book.format === 'epub' ? '~' : ''}${book.pages} p`) : null, check, more, flipBtn, isList ? unlist : null, progressMarks(pct))),
       h(
         'div',
         { class: 'meta' },

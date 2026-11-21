@@ -22,7 +22,7 @@ export function startTilt() {
   document.addEventListener('pointermove', (e) => {
     if (e.pointerType !== 'mouse' || !settings.cardTilt || calm.matches || !fine.matches) return release();
     const wrap = e.target instanceof Element ? e.target.closest('.book-stage, .series-stack') : null;
-    if (!wrap || wrap.closest('.view-list')) return release();
+    if (!wrap || wrap.closest('.view-list') || wrap.querySelector('.cover-wrap.flipping')) return release();
     if (current && current !== wrap) release();
     cancelAnimationFrame(frame);
     frame = requestAnimationFrame(() => {
@@ -49,10 +49,12 @@ export function startTilt() {
       wrap.style.setProperty('--vy', `${(50 - 150 * curve(oy)).toFixed(1)}%`);
       // Light on a matte cover is not a hotspot: the side turning away from you goes a little darker, the side coming forward a little lighter.
       const set = (name, v) => wrap.style.setProperty(name, v.toFixed(3));
+      if (settings.cardShade) {
       set('--dr', Math.max(ox, 0) * 0.2); set('--dl', Math.max(-ox, 0) * 0.2);
       set('--db', Math.max(oy, 0) * 0.18); set('--dt', Math.max(-oy, 0) * 0.18);
       set('--ll', Math.max(ox, 0) * 0.08); set('--lr', Math.max(-ox, 0) * 0.08);
       set('--lt', Math.max(oy, 0) * 0.07); set('--lb', Math.max(-oy, 0) * 0.07);
+      }
     });
   });
   document.addEventListener('pointerleave', release);

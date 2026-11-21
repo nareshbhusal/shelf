@@ -181,7 +181,7 @@ html[data-show-tags="hover"] .card:is(:hover, :focus-visible, .selected) .tags {
     linear-gradient(180deg, transparent 35%, rgba(0,0,0,var(--db, 0))), linear-gradient(0deg, transparent 35%, rgba(0,0,0,var(--dt, 0))),
     linear-gradient(90deg, transparent 35%, rgba(255,255,255,var(--lr, 0))), linear-gradient(270deg, transparent 35%, rgba(255,255,255,var(--ll, 0))),
     linear-gradient(180deg, transparent 35%, rgba(255,255,255,var(--lb, 0))), linear-gradient(0deg, transparent 35%, rgba(255,255,255,var(--lt, 0))); }
-html[data-card-tilt="1"] .card:hover .tilting .cover-wrap::before { opacity: 1; }
+html[data-card-tilt="1"][data-card-shade="1"] .card:hover .tilting .cover-wrap::before { opacity: 1; }
 
 /* A book is a solid: the cover in front, and behind it the fore-edge (right), top, bottom and spine (left) as real faces in 3D,
    so when the book turns you see them turn. The stage is a still frame with a close camera placed up and to the right of the book,
@@ -785,3 +785,41 @@ html[data-show-folios="0"] .folio { height: 14px; font-size: 0; background: none
 html[data-show-folios="0"] .reader:not(.paged) .spread[data-folio]::before { display: none; }
 html[data-show-folios="0"] .reader:not(.paged) .spread[data-folio] { margin-bottom: var(--page-gap, 12px); }
 .reader.paged .folio { display: none; }
+
+/* ---- card effects that can be switched off in Settings (they cost something on every card) ---- */
+html[data-cover-shadow="0"] .cover-wrap, html[data-cover-shadow="0"] .card:hover .cover-wrap { box-shadow: 0 0 0 1px rgba(0,0,0,.3); }
+html[data-badge-blur="0"] .badge { backdrop-filter: none; background: rgba(12,18,20,.82); }
+html[data-ribbon-shadow="0"] .ribbon { filter: none; }
+html[data-spine-colour="0"] .book-stage { --spine: #2f3a42 !important; }
+html[data-card-motion="0"] :is(.cover-wrap, .book3d, .book-stage, .ribbon, .badge, .card)  { transition: none !important; }
+
+/* ---- flipping through a book on its card (flip.js) ---- */
+.flipbtn { position: absolute; z-index: 2; bottom: 8px; left: 8px; width: 26px; height: 26px; border-radius: 50%; border: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.62); color: #fff; padding: 0; }
+.card:hover .flipbtn { display: inline-flex; }
+html[data-flip-peek="0"] .flipbtn, .view-list .flipbtn { display: none !important; }
+.cover-wrap.flipping > :is(.badge, .ribbon, .progress, .check, .more, .unlist, .flipbtn) { display: none !important; }
+.cover-wrap.flipping::after { z-index: 5; } /* the binding stays over the pages */
+.card.flipping-card .book3d { transform: translateY(-5px); }
+.flip { position: absolute; inset: 0; z-index: 4; background: #e9e4d5; perspective: 900px; overflow: hidden; cursor: pointer; user-select: none; }
+.flip-page, .flip-leaf { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #f2eee2; }
+.flip-page img, .flip-leaf img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
+.flip-page.is-cover img, .flip-leaf.is-cover img { object-fit: var(--cover-fit); }
+.flip-miss { color: #756d5a; font-size: .8rem; }
+.flip-leaf { transform-origin: 0 50%; backface-visibility: hidden; transition: transform var(--ms, 500ms) cubic-bezier(.45, .05, .25, 1); }
+.flip-leaf::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(0,0,0,0), rgba(0,0,0,.4)); opacity: 0; transition: opacity var(--ms, 500ms) ease-in-out; }
+.flip-leaf.fwd.go { transform: rotateY(-92deg); }
+.flip-leaf.fwd.go::after { opacity: 1; }
+.flip-leaf.back { transform: rotateY(-92deg); }
+.flip-leaf.back::after { opacity: 1; }
+.flip-leaf.back.go { transform: rotateY(0); }
+.flip-leaf.back.go::after { opacity: 0; }
+.flip.turning > .flip-page::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(90deg, rgba(0,0,0,.3), transparent 50%); }
+.flip-btn { position: absolute; top: 6px; z-index: 6; width: 26px; height: 26px; border-radius: 50%; border: 0; display: inline-flex; align-items: center; justify-content: center; background: rgba(0,0,0,.62); color: #fff; padding: 0; opacity: 0; transition: opacity .15s; cursor: pointer; }
+.flip-close { right: 6px; } .flip-open { right: 38px; }
+.flip:hover .flip-btn, .flip:focus-within .flip-btn { opacity: 1; }
+.flip-bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 6; padding: 22px 10px 7px 16px; background: linear-gradient(0deg, rgba(0,0,0,.7), transparent); color: #fff; font-size: .72rem; display: flex; align-items: center; gap: 8px; opacity: 0; transition: opacity .15s; cursor: default; }
+.flip:hover .flip-bar, .flip:focus-within .flip-bar { opacity: 1; }
+.flip-bar input { flex: 1; min-width: 0; accent-color: var(--accent); height: 14px; }
+.flip-num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (hover: none) { .flip-btn, .flip-bar { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .flip-leaf, .flip-leaf::after { transition-duration: 1ms !important; } }

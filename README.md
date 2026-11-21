@@ -298,9 +298,21 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   stays true and the side that turns away from the pointer hides its face while the opposite side comes forward (page
   edges when the pointer is on the left, the spine when it is on the right, bottom edge when it is high, top edge when it
   is low), with a small lean and a little shading, darker on the side turning away and lighter on the side coming forward.
-  The motion eases in when the pointer arrives and out when it leaves. At rest the page edges and top show. Settings > Library can turn the page edges and the
-  tilt off, switch the ribbon back to the old bar along the bottom, or hide progress until you hover. Tilt also
+  The motion eases in when the pointer arrives and out when it leaves. At rest the page edges and top show. Tilt also
   stays off for touch screens, the list layout and "reduce motion". It is all drawing; nothing is written to a book.
+- **Card effects** (Settings > Card effects). Each effect that costs graphics work can be switched off on its own:
+  books as solids (page edges, spine and thickness, the heaviest), spine colour sampled from the cover, pointer
+  tilt, tilt shading, cover shadow, blurred badges, ribbon shadow, and card transitions. The progress style
+  (ribbon, bar, or only on hover) is in Settings > Library. If scrolling or hovering feels heavy on a big library or an
+  older machine, start with "Books as solids", then tilt.
+- **Flip through a book on its card.** Hover a PDF or comic card and press the pages button on the cover (or use
+  "Flip through" in the card's menu) to leaf through it without opening the reader: the cover opens in place and
+  pages turn with a 3D leaf. It starts at the page you stopped on. `→` `←`, a click on the right or left half, the mouse
+  wheel, or the scrubber along the bottom turn pages; `Home`/`End` jump; `Enter` or the arrow button opens the reader at
+  that page; `Esc`, the close button or a click elsewhere puts the book back. Pages are drawn on the server one at a
+  time at card size and kept in a small cache, so nothing is saved or written, and your reading position is not changed.
+  EPUBs can't be flipped (their pages only exist once laid out in the reader) and neither can PDFs over 120 MB. Turn
+  it off in Settings > Card effects.
 - **Reader**: continuous vertical scroll by default, or **one page at a time (horizontal)** for PDFs and
   comics: the `M` key or the button in the top bar switches, and Settings sets the default for PDFs and
   comics separately. Each page is fitted to the window and the pages sit side by side, so you can swipe
@@ -517,7 +529,7 @@ src/shelffile.ts shelf-file checks (+ shelfcli.ts)   src/auth.ts  pass key login
 src/epub.ts     EPUB structure/resources     public/js/epubreader.js  EPUB reader
 src/rename.ts   checked, undoable renames    public/js/rename.js      rename dialogs
 src/pdfnotes.ts highlights/notes inside PDFs src/launch.ts   "Open with" (no shell, argv only)
-src/hygiene.ts  orphan cleanup, storage stats
+src/hygiene.ts  orphan cleanup, storage stats  src/peek.ts   single pages for flip-through on cards
 src/server.ts   REST API + static files
 tools/          shelf-opener.py (host helper for Docker)
 public/         no-build frontend (plain ES modules): library.js, reader.js, annotations.js, ...
