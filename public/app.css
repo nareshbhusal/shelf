@@ -192,10 +192,10 @@ html[data-card-tilt="1"] .card:hover .tilting .cover-wrap::before { opacity: 1; 
    side coming forward shows it (pages, spine, top, bottom); the cover itself never distorts. A small turn is added on top. */
 .book-stage.tilting { transition: perspective-origin .25s ease-out; }
 .book-stage.entering { transition: perspective-origin .45s ease-out; }
-.book-stage[data-edge="1"] { --t: calc(var(--card-w) * .03); }
-.book-stage[data-edge="2"] { --t: calc(var(--card-w) * .055); }
-.book-stage[data-edge="3"] { --t: calc(var(--card-w) * .08); }
-.book-stage[data-edge="4"] { --t: calc(var(--card-w) * .11); }
+.book-stage[data-edge="1"] { --t: calc(var(--card-w) * .03); --bind: 5.5%; }
+.book-stage[data-edge="2"] { --t: calc(var(--card-w) * .055); --bind: 8%; }
+.book-stage[data-edge="3"] { --t: calc(var(--card-w) * .08); --bind: 11.5%; --hinge: .2; }
+.book-stage[data-edge="4"] { --t: calc(var(--card-w) * .11); --bind: 15%; --hinge: .28; }
 html[data-page-edge="0"] .book-stage, .book-stage.far { --t: 0px; perspective: none; }
 .book3d { position: relative; transform-style: preserve-3d; transform-origin: 50% 50% calc(var(--t) / -2); transition: transform .55s cubic-bezier(.2, .7, .2, 1); }
 .card:hover .book3d { transform: translateY(-5px) rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); }
@@ -209,12 +209,15 @@ html[data-page-edge="1"] .book-stage.far .face { display: none; }
 .face.bottom { left: 1px; right: 1px; height: var(--t); bottom: calc(var(--t) / -2); transform: translateZ(calc(var(--t) / -2)) rotateX(-90deg);
   background: linear-gradient(0deg, transparent, rgba(30,20,5,.4)), repeating-linear-gradient(0deg, var(--paper-shade) 0 1px, var(--paper) 1px 2px); }
 .face.left { top: 0; bottom: 0; width: var(--t); left: calc(var(--t) / -2); transform: translateZ(calc(var(--t) / -2)) rotateY(-90deg);
-  background: linear-gradient(90deg, rgba(0,0,0,.35), rgba(0,0,0,.1)), var(--spine, #2f3a42); border-radius: 2px 0 0 2px; }
+  background: linear-gradient(90deg, rgba(0,0,0,.42), rgba(255,255,255,.1) 50%, rgba(0,0,0,.3)), var(--spine, #2f3a42); border-radius: 2px 0 0 2px; }
 .view-list .book-stage { perspective: none; width: 40px; }
 .view-list .face { display: none !important; }
 .view-list .card:hover .book3d { transform: none; }
-/* the binding: a crease and a catch of light along the spine edge, over any cover */
-.cover-wrap::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(0,0,0,.34) 0, rgba(255,255,255,.2) 1.2%, rgba(0,0,0,.16) 3.4%, rgba(255,255,255,.05) 5.5%, transparent 9%); }
+/* the binding: a crease and a catch of light along the spine edge, over any cover. The thicker the book, the wider the bound region
+   (--bind, set with the thickness) and, from a fat paperback up, a second groove where the cover hinges (--hinge). */
+.cover-wrap::after { content: ""; position: absolute; inset: 0; pointer-events: none; background:
+  linear-gradient(90deg, transparent calc(var(--bind, 9%) * .78), rgba(0,0,0,calc(var(--hinge, 0) * .9)) calc(var(--bind, 9%) * .84), rgba(255,255,255,calc(var(--hinge, 0) * .55)) calc(var(--bind, 9%) * .9), transparent calc(var(--bind, 9%) * .97)),
+  linear-gradient(90deg, rgba(0,0,0,.34) 0, rgba(255,255,255,.2) calc(var(--bind, 9%) * .13), rgba(0,0,0,.16) calc(var(--bind, 9%) * .38), rgba(255,255,255,.05) calc(var(--bind, 9%) * .61), transparent var(--bind, 9%)); }
 .cover, .cover img, .cover .ph { position: absolute; inset: 0; width: 100%; height: 100%; }
 .cover img { object-fit: var(--cover-fit); background: var(--bg3); }
 .cover .ph { display: flex; align-items: center; justify-content: center; font-family: var(--serif); font-size: 2.3rem; font-weight: 500; letter-spacing: .02em; color: rgba(255,255,255,.7); }

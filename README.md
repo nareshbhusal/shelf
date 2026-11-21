@@ -289,7 +289,8 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
 - **How a book card looks.** The cover has a creased spine with a catch of light, and behind it the book is a real
   solid: paper edges on the right, top and bottom and a spine in the cover's own colour on the left, all drawn in 3D
   so they turn when you tilt it. The book is thicker the more pages it has (four steps, from a booklet to a thick
-  novel). Only books on or near the screen are drawn as solids, which keeps scrolling light in big libraries; turning
+  novel), and so is its bound region: a thin booklet has a narrow crease, a fat book a wide one with a second groove
+  where the cover hinges. Only books on or near the screen are drawn as solids, which keeps scrolling light in big libraries; turning
   "Page edges" off makes it lighter still. Reading progress
   is a bookmark ribbon hanging from the top edge, longer the further you are into the book; a finished book gets
   a short greyed ribbon with a tick. When the pointer is over a cover it lifts and the view of it shifts with the pointer, as if you moved your head: the cover
@@ -556,7 +557,8 @@ them off) and extra space between rows and spreads, so two-page spreads stacked 
 openings. The two stacks of pages beside an open book follow how many pages are on each side: nothing behind you on the first
 page, most of the volume on the left by page 40 (or a fifth of a short book) while the right stack stays a little thicker until
 you pass the middle, and by the last spread the unread side is
-flat and the volume is all on the left.
+flat and the volume is all on the left. How thick the stacks get depends on the whole book: about 3 px of paper for 20
+pages, 6 for 100, 11 for 400 and 20 for 1,500 (28 at most, and less on a narrow window).
 
 **Covers.** A PDF's cover is page 1, drawn by mupdf (the library that also writes the annotations; poppler's
 `pdftoppm` is the fallback for files mupdf refuses or that are over 120 MB). A cover is only a cached picture in

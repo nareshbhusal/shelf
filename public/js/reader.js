@@ -273,7 +273,9 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     const behind = Math.max(0, (g ? Math.min(...g) : currentPage) - 1);
     const ahead = Math.max(0, total - (g ? Math.max(...g) : currentPage));
     const ref = Math.max(1, Math.min(40, total * 0.2));
-    const full = clamp(total / 14, 2, 14); // a long book is a thick one
+    // A long book is a thick one, and keeps getting thicker: about 3px of paper for 20 pages, 6px for 100, 11px for 400, 20px for 1500
+    // (the square root, so a hundred more pages matter less the more there already are), but never more than the window can spare.
+    const full = clamp(0.9 + 0.5 * Math.sqrt(total), 2, Math.min(28, window.innerWidth / 40));
     const side = (n) => {
       const quick = 1 - (1 - Math.min(1, n / ref)) ** 2;
       return n <= 0 ? 1 : 1 + full * (0.6 * quick + 0.4 * (n / total));
