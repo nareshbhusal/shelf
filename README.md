@@ -309,18 +309,17 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
 - **Flip through a book from its card.** Hover a PDF or comic card and press the pages button on the cover (or use
   "Flip through" in the card's menu, or press Space while the pointer is on the book) to leaf through it without opening the reader. The book lifts out of the shelf into
   a large one in front of it (the shelf dims behind, and the card's own cover stays where it was). It is a whole book: a
-  closed cover in the colour of the spine whose board swings open to a two-page spread with the fold drawn as in the reader's two-page mode (a hairline and a soft shadow either side), a stack of paper edge on each side (left the pages you have read, right the ones still to come, each as thick
-  as that many pages, and the whole book as thick as its page count, like the card), the endpaper inside the covers, and
-  pages that turn as double-sided leaves hinged at the spine. It opens on the spread of the page you stopped on. `→` `←`
+  closed hardcover whose cloth is the colour of the card's spine (the average of the cover, deepened so it reads as cloth; a book without a colour gets a steady one from its name) and whose board swings open to a two-page spread with the fold drawn as in the reader's two-page mode (a hairline and a soft shadow either side), a stack of paper edge on each side (left the pages you have read, right the ones still to come, each as thick
+  as that many pages, and the whole book as thick as its page count, like the card), the endpaper inside the covers (paper tinted from the cloth, with a faint woven pattern and a border of the cloth), and
+  pages that turn as double-sided leaves hinged at the spine. The cover swings open straight onto the spread of the page you stopped on (the pages go with it in one sweep; closing and the scrubber do the same, so nothing jumps). `→` `←`
   (`Space`, a click on the right or left page, a swipe, the mouse wheel or a sideways trackpad swipe) turn a spread; `Home`/`End` jump to the first and last; the scrubber
-  beneath goes to any page; `Enter` or "Open in reader" carries on in the reader at the right-hand page; `Esc`, the close
+  beneath goes to any page; The book can be resized: drag the grip at the end of the bar (double-click it to reset), or press `+`, `-` and `0`; the size is remembered. `Enter` or "Open in reader" carries on in the reader at the right-hand page; `Esc`, the close
   button or a click on the dimmed shelf shuts the book and puts it back. Pages are drawn on the server one at a time, at
   the size they are shown, and kept in a small cache, so nothing is saved or written, and your reading position is not
   changed. Pages are laid out left to right (a right-to-left manga reads in the other direction, which this doesn't
   mirror). EPUBs can't be flipped (their pages only exist once laid out in the reader) and neither can PDFs over 120 MB.
   Settings > Card effects turns the viewer off, hides its button on covers (it stays in the card menu, and on Space) or
-  stops Space from opening it. A turning leaf has two pages, and which one shows is switched at the quarter turn by the
-  page itself rather than left to the browser's 3D, so the page being left and the page arriving never show through each other.
+  stops Space from opening it. A turning leaf is two plain pages hinged at the spine, swung by a script on one clock (the page being left goes from flat to edge-on, then the page arriving goes from edge-on to flat on the other side), so it does not depend on how a particular browser handles the back of a 3D plane or animated visibility.
 - **Work done once.** A cover's spine colour (its average colour) is worked out on the server when the cover is first
   made and kept in the data folder's database (table `cover_colour`; nothing in the library), so the shelf gets it with the book
   list instead of every card reading the picture's pixels each time it is drawn. It is dropped and made again when a cover is

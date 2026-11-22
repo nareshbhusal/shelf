@@ -93,6 +93,7 @@ const SCHEMA = [
       { key: 'uiScale', label: 'Interface size', type: 'range', min: 85, max: 130, step: 5, unit: '%', default: 100 },
       { key: 'sidebarWidth', label: 'Sidebar width', type: 'range', min: 200, max: 400, step: 10, unit: 'px', default: 270 },
       { key: 'sidebarOrder', label: 'Sidebar sections (top to bottom)', type: 'order', options: SIDEBAR_SECTIONS, default: SIDEBAR_SECTIONS.map(([k]) => k).join(','), stacked: true },
+      { key: 'flipScale', label: 'Size of the flip-through book', type: 'range', min: 40, max: 115, step: 1, unit: '%', default: 100, hidden: true },
       { key: 'sessionsEnabled', label: 'Use docsessions', type: 'checkbox', default: true, hidden: true },
       { key: 'sessionsOpen', label: 'Sessions folded open under Reading lists', type: 'checkbox', default: true, hidden: true },
     ],
