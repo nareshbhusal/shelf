@@ -516,7 +516,7 @@ export function createLibraryView(route) {
     const flipHere = () => {
       const wrap = card.querySelector('.cover-wrap');
       const to = (page) => { const href = openHref(book); location.hash = `${href}${href.includes('?') ? '&' : '?'}page=${page}`; };
-      openFlip(wrap, book, { open: to });
+      openFlip(wrap, book, { open: to, saved: () => replaceCard(book) });
     };
     const flipBtn = canFlip(book)
       ? h('button', { class: 'flipbtn', title: 'Flip through', 'aria-label': 'Flip through this book', onClick: (e) => { e.preventDefault(); e.stopPropagation(); flipHere(); } }, icon('pages', 15))

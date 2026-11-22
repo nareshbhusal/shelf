@@ -74,6 +74,7 @@ const SCHEMA = [
       { key: 'flipPeek', label: 'Flip-through viewer: leaf through a PDF or comic as an open book, right on the shelf', type: 'checkbox', default: true },
       { key: 'flipButton', label: 'Show its button on covers (also in the card menu)', type: 'checkbox', default: true },
       { key: 'flipSpace', label: 'Space opens it for the book under the pointer', type: 'checkbox', default: true },
+      { key: 'flipSpeed', label: 'Page-turn speed (flip-through viewer and the reader\'s flip)', type: 'range', min: 50, max: 200, step: 10, unit: '%', default: 100 },
     ],
   },
   {
@@ -110,7 +111,7 @@ const SCHEMA = [
       { key: 'spreadComic', label: 'Comic pages', type: 'select', options: [['single', 'One at a time'], ['double', 'Two side by side']], default: 'single' },
       { key: 'spreadCover', label: 'Two side by side: first page on its own (cover)', type: 'checkbox', default: true },
       { key: 'showFolios', label: 'Scrolling: page numbers between pages', type: 'checkbox', default: true },
-      { key: 'pagedAnimation', label: 'Animate page turns (one page at a time)', type: 'checkbox', default: true },
+      { key: 'pagedAnimation', label: 'Animate page turns (one page at a time)', type: 'select', options: [['slide', 'Slide'], ['flip', 'Flip, like a book (two pages side by side; others slide)'], ['off', 'Off']], default: 'slide' },
       { key: 'pdfWidth', label: 'PDF page width', type: 'range', min: 400, max: 2000, step: 50, unit: 'px', default: 900 },
       { key: 'comicWidth', label: 'Comic page width', type: 'range', min: 300, max: 1800, step: 50, unit: 'px', default: 900 },
       { key: 'epubWidth', label: 'EPUB text width', type: 'range', min: 400, max: 1200, step: 20, unit: 'px', default: 720 },
@@ -131,6 +132,10 @@ try {
 } catch {
   /* corrupt or unavailable storage: use defaults */
 }
+/** Page turns used to be on or off; now they are off, slide or flip. An older saved on/off becomes slide/off. */
+const animMode = (v) => (v === false || v === 'off' ? 'off' : v === 'flip' ? 'flip' : 'slide');
+settings.pagedAnimation = animMode(settings.pagedAnimation);
+export const pageAnim = () => animMode(settings.pagedAnimation);
 
 /** What to call a book on screen: its file name (default) or the title found in its metadata. */
 export const stripExt = (filename) => filename.replace(/\.[^.]+$/, '');
@@ -183,6 +188,7 @@ export async function syncSettings() {
   const have = Object.keys(remote).filter((k) => known.has(k));
   if (have.length) {
     for (const k of have) settings[k] = remote[k];
+    settings.pagedAnimation = animMode(settings.pagedAnimation);
     cache();
     applySettings();
     listeners.forEach((f) => f('*'));

@@ -1,6 +1,6 @@
 import { api, fileUrl, pageUrl } from './api.js';
 import { createAnnotations } from './annotations.js';
-import { bookName, onSettings, setSetting, settings } from './settings.js';
+import { bookName, onSettings, pageAnim, setSetting, settings } from './settings.js';
 import { h, hashFor, icon, clamp, dirSegments, goBack } from './util.js';
 import { appName } from './store.js';
 import { openFileInfo } from './fileinfo.js';
@@ -8,6 +8,7 @@ import { openWithMenu } from './openwith.js';
 import { epubImpl } from './epubreader.js';
 import { toast } from './ui.js';
 import { clearMarks, createSearch, markMatches } from './search.js';
+import { createReaderFlip } from './readerflip.js';
 
 const PDFJS = '/vendor/pdfjs';
 let pdfjsPromise = null;
@@ -736,7 +737,7 @@ function groupSpreads(count, { cover, wide }) {
  * which page you are on is simply how far across you have scrolled. (The CSS is under `.reader.paged`.)
  * In right-to-left mode the strip runs the other way and scrollLeft is negative.
  */
-function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf = (i) => i + 1, getRtl, report, onResize }) {
+function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf = (i) => i + 1, getRtl, report, onResize, peekUrl, isSpread }) {
   let vw = 0;
   let vh = 0;
   const measure = () => {
@@ -746,14 +747,18 @@ function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf
     pagesEl.style.setProperty('--vh', `${vh}px`);
   };
   measure();
+  // Flip page turns (Settings > Reader): with two pages side by side, a leaf swings over (readerflip.js). Only the keys, buttons and clicks do this; a finger's own swipe still slides.
+  const flip = peekUrl ? createReaderFlip({ root: scroller.parentElement ?? document.body, pagesEl, scroller, peekUrl }) : null;
+  let flipping = false;
+  let queued = null;
   let on = false;
   let scrollTimer = 0;
   let resizeTimer = 0;
   const index = () => clamp(Math.round(Math.abs(scroller.scrollLeft) / Math.max(1, vw)), 0, Math.max(0, getCount() - 1));
-  const reportNow = () => report(pageOf(index()));
+  const reportNow = () => { report(pageOf(index())); if (flip && isSpread?.() && pageAnim() === 'flip') flip.warm(index(), getCount()); };
   // Pressing → twice quickly must move two pages, so while a turn is still animating, count from where it is heading.
   let heading = null;
-  const current = () => (heading && Date.now() - heading.t < 700 ? heading.i : index());
+  const current = () => (heading && (flipping || Date.now() - heading.t < 700) ? heading.i : index());
   const onScroll = () => {
     if (!on) return;
     clearTimeout(scrollTimer);
@@ -782,8 +787,25 @@ function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf
     goSlot(i, smooth) {
       measure();
       heading = { i, t: Date.now() };
-      scroller.scrollTo({ left: (getRtl() ? -1 : 1) * i * vw, top: 0, behavior: smooth && settings.pagedAnimation !== false ? 'smooth' : 'instant' });
+      const to = (behavior) => scroller.scrollTo({ left: (getRtl() ? -1 : 1) * i * vw, top: 0, behavior });
+      if (flipping) { queued = i; return; } // a leaf is still turning: carry on from where it lands
+      const from = index();
+      if (smooth && flip && on && isSpread?.() && !getRtl() && pageAnim() === 'flip' && i !== from) {
+        flipping = true;
+        flip.turn(from, i, getCount(), () => to('instant')).then((done) => {
+          if (!done) to('smooth');
+        }).finally(() => {
+          flipping = false;
+          const q = queued;
+          queued = null;
+          if (q !== null && q !== i) this.goSlot(q, true);
+        });
+        return;
+      }
+      to(smooth && pageAnim() !== 'off' ? 'smooth' : 'instant');
     },
+    /** Gets the pictures a flip will need ready (called when a spread has come to rest). */
+    warm(i) { if (flip && isSpread?.() && pageAnim() === 'flip') flip.warm(i, getCount()); },
     /** To the slot that shows page n. */
     goTo(n, smooth) {
       this.goSlot(slotOf(n), smooth);
@@ -821,6 +843,8 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
     pageOf: (i) => { const g = mounted.get(cur)?.groups; return g ? g[Math.min(i, g.length - 1)][0] : i + 1; },
     getRtl: () => !!env?.rtl,
     report: (n) => env?.report(n, list[cur].id),
+    isSpread: () => spread && paged,
+    peekUrl: (el, w) => { const part = list.find((p) => String(p.id) === el.dataset.part) ?? book; return `/api/books/${part.id}/peek/${el.dataset.page}?w=${w}&v=${part.fingerprint}`; },
   });
   strip.set(paged);
 
@@ -1136,6 +1160,8 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
     pageOf: (i) => (groups ? groups[Math.min(i, groups.length - 1)][0] : i + 1),
     getRtl: () => !!env?.rtl,
     report: (n) => env?.report(n),
+    isSpread: () => spread && paged,
+    peekUrl: (el, w) => `/api/books/${book.id}/peek/${el.dataset.page}?w=${w}&v=${book.fingerprint}`,
     onResize: (n) => {
       pages.forEach(sizeEl);
       pages.filter((p) => p.visible).forEach(render);

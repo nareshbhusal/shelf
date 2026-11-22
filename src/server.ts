@@ -3,7 +3,7 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { DATA_DIR, HOST, HOST_LIBRARY, IN_DOCKER, LIBRARY_DIR, OPENER_SOCKET, PDFJS_DIR, PORT, READONLY, ROOT, SESSIONS_CMD, SHELF_NAME } from './config.js';
 import { AUTH_ON, authGate } from './auth.js';
-import { PeekError, peekPage } from './peek.js';
+import { PeekError, peekPage, peekText } from './peek.js';
 import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb, spineColour } from './covers.js';
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
@@ -552,6 +552,18 @@ app.get('/api/books/:id/peek/:n', async (req, res) => {
     res.setHeader('Content-Type', 'image/jpeg');
     res.setHeader('Cache-Control', 'private, max-age=86400');
     res.send(img);
+  } catch (e) {
+    if (e instanceof PeekError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
+});
+
+// Where the words of one page are (fractions of the page), so the viewer can make the text selectable.
+app.get('/api/books/:id/peek/:n/text', async (req, res) => {
+  const book = getBook(req.params.id);
+  try {
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.json({ words: await peekText(book, toInt(req.params.n)) });
   } catch (e) {
     if (e instanceof PeekError) throw new HttpError(e.status, e.message);
     throw e;

@@ -815,8 +815,8 @@ html[data-flip-peek="0"] .flipbtn, html[data-flip-button="0"] .flipbtn, .view-li
 .flip-tail { background: repeating-linear-gradient(0deg, #f3eedf 0 1px, #cfc7af 1px 2px); box-shadow: inset 0 -3px 4px -2px rgba(0,0,0,.4); }
 .flip-tail.l { border-radius: 0 0 0 2px; } .flip-tail.r { border-radius: 0 0 2px 0; }
 /* the left side only exists once the cover has landed on it (and goes the moment the cover lifts off) */
-.flip:not(.closed) > :is(.flip-pg.lp, .flip-stack.l, .flip-board.l, .flip-tail.l) { transition: opacity calc(var(--ms, 0ms) * .15) ease calc(var(--ms, 0ms) * .8), left var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1), right var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1), width var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1); }
-.flip.closed > :is(.flip-pg.lp, .flip-stack.l, .flip-board.l, .flip-tail.l) { opacity: 0; transition: none; } /* (only the pages that rest there: the leaf's own back page, also on the left, is not one of them) */
+/* the left half arrives as the cover swings over (flip.js sets --land from the leaf's own progress); only the pages that rest there, not the leaf's back page */
+.flip > :is(.flip-pg.lp, .flip-stack.l, .flip-board.l, .flip-tail.l) { opacity: var(--land, 1); }
 .flip-pg { position: absolute; top: 0; bottom: 0; width: 50%; background: var(--paper); overflow: hidden; }
 .flip-pg.lp { left: 0; border-radius: 2px 0 0 2px; }
 .flip-pg.rp { left: 50%; border-radius: 0 2px 2px 0; }
@@ -841,17 +841,52 @@ html[data-flip-peek="0"] .flipbtn, html[data-flip-button="0"] .flipbtn, .view-li
 .flip-pg.is-end, .flip-face.is-end { background: repeating-linear-gradient(45deg, rgba(255,255,255,.2) 0 1px, transparent 1px 5px), repeating-linear-gradient(-45deg, rgba(0,0,0,.04) 0 1px, transparent 1px 5px), var(--endpaper); }
 .flip-face.cover.b { box-shadow: inset 7px 0 0 var(--cloth), inset 0 7px 0 var(--cloth), inset 0 -7px 0 var(--cloth); }
 /* while a leaf is up, the page under it is in its shadow, lightly */
-.flip-pg::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0; }
+.flip-pg::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: var(--cast, 0); } /* the crease's shade follows the leaf, frame by frame (flip.js) */
 .flip-pg.rp::before { background: linear-gradient(90deg, rgba(0,0,0,.12), transparent 55%); }
 .flip-pg.lp::before { background: linear-gradient(270deg, rgba(0,0,0,.12), transparent 55%); }
-.flip.turning > .flip-pg::before { opacity: 1; transition: opacity var(--ms, 500ms) ease-in; }
-.flip-bar { display: flex; align-items: center; gap: 12px; height: 44px; color: #f1eee4; font-size: .85rem; cursor: default; }
-.flip-bar input { flex: 1; min-width: 0; accent-color: var(--accent); }
-.flip-num { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 6.5em; }
+.flip-bar { display: flex; align-items: center; gap: 8px; height: 40px; color: #f1eee4; font-size: .85rem; cursor: default; opacity: .55; transition: opacity .2s; }
+.flip-bar:hover, .flip-bar:focus-within { opacity: 1; }
+.flip-n { box-sizing: content-box; min-width: 2ch; padding: 3px 4px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: inherit; font: inherit; font-variant-numeric: tabular-nums; text-align: right; outline: none; }
+.flip-n:hover { border-color: rgba(255,255,255,.25); }
+.flip-n:focus { border-color: var(--accent); background: rgba(0,0,0,.35); }
+.flip-tot { font-variant-numeric: tabular-nums; white-space: nowrap; margin-left: -4px; }
+.flip-sp { flex: 1; }
 .flip-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 0; border-radius: 15px; background: rgba(255,255,255,.14); color: #fff; cursor: pointer; font: inherit; font-size: .8rem; white-space: nowrap; }
 .flip-btn.icon { width: 30px; padding: 0; justify-content: center; }
 .flip-btn:hover, .flip-btn:focus-visible { background: rgba(255,255,255,.26); }
 /* the grip that resizes the book */
 .flip-grip { width: 22px; height: 22px; flex: none; cursor: nwse-resize; touch-action: none; opacity: .7; background: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255,255,255,.75) 4px 5px) no-repeat right bottom / 16px 16px; clip-path: polygon(100% 0, 100% 100%, 0 100%); }
 .flip-grip:hover { opacity: 1; }
+/* selecting and highlighting in the viewer (flipnotes.js): a box the shape of each page picture holds its highlights, note pins and, once at rest, invisible words */
+.flip-pg, .flip-face { container-type: size; }
+.fa-page { position: absolute; inset: 0; margin: auto; width: min(100cqw, calc(100cqh * var(--r, .7))); height: min(100cqh, calc(100cqw / var(--r, .7))); container-type: size; pointer-events: none; }
+.fa-ann, .fa-text { position: absolute; inset: 0; }
+.fa-ann { pointer-events: none; }
+.fa-hl { position: absolute; opacity: .5; border-radius: 2px; }
+.fa-ink { position: absolute; inset: 0; width: 100%; height: 100%; }
+.fa-pin { position: absolute; z-index: 2; pointer-events: auto; width: 16px; height: 16px; padding: 0; border: 0; border-radius: 50% 50% 50% 0; display: flex; align-items: center; justify-content: center; color: #1b1b1b; cursor: pointer; transform: translate(-30%, -75%); box-shadow: 0 1px 3px rgba(0,0,0,.45); }
+.fa-text { z-index: 1; user-select: text; -webkit-user-select: text; cursor: text; }
+.fa-text span { position: absolute; display: block; white-space: pre; line-height: 1; color: transparent; transform-origin: 0 0; pointer-events: auto; }
+.fa-text ::selection, .fa-text::selection { background: rgba(70, 130, 255, .38); color: transparent; }
+.fa-pop { position: fixed; z-index: 60; display: flex; align-items: center; gap: 6px; padding: 5px 8px; border-radius: 18px; background: rgba(22,22,26,.95); color: #f1eee4; box-shadow: 0 6px 22px rgba(0,0,0,.5); font-size: .8rem; user-select: none; }
+.fa-pop.card { flex-direction: column; align-items: stretch; width: min(270px, 84vw); border-radius: 10px; padding: 9px; gap: 8px; }
+.fa-row { display: flex; align-items: center; gap: 6px; }
+.fa-sp { flex: 1; }
+.fa-dot { width: 17px; height: 17px; border-radius: 50%; border: 2px solid transparent; padding: 0; cursor: pointer; }
+.fa-dot:hover:not(:disabled), .fa-dot.on { border-color: #fff; }
+.fa-dot:disabled { opacity: .4; cursor: default; }
+.fa-tool { display: inline-flex; width: 26px; height: 26px; align-items: center; justify-content: center; border: 0; border-radius: 50%; background: transparent; color: inherit; cursor: pointer; padding: 0; }
+.fa-tool:hover:not(:disabled), .fa-tool:focus-visible { background: rgba(255,255,255,.18); }
+.fa-tool:disabled { opacity: .4; cursor: default; }
+.fa-tool.danger { background: #b3382e; }
+.fa-quote { font-style: italic; opacity: .8; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.fa-note { white-space: pre-wrap; max-height: 9em; overflow: auto; }
+.fa-title { opacity: .75; }
+.fa-text-in { width: 100%; box-sizing: border-box; resize: vertical; border-radius: 6px; border: 1px solid rgba(255,255,255,.25); background: rgba(0,0,0,.35); color: inherit; font: inherit; padding: 6px; }
+.fa-btn { border: 0; border-radius: 12px; padding: 3px 12px; background: rgba(255,255,255,.16); color: inherit; font: inherit; cursor: pointer; }
+.fa-btn:hover { background: rgba(255,255,255,.28); }
+.fa-err { color: #ff9b91; }
+/* the reader's flip page turn (readerflip.js): only what moves is drawn here, over the reader's own pages; the leaf itself is the viewer's */
+.rflip { position: fixed; z-index: 4; pointer-events: none; --paper: #f4f0e3; --cast: 0; }
+.rflip img { opacity: 1 !important; }
 @media (prefers-reduced-motion: reduce) { .flip, .flip-pg::before, .flip-board, .flip-stack, .flip-tail, .flip-layer, .flip-stage { transition-duration: 1ms !important; transition-delay: 0s !important; } }

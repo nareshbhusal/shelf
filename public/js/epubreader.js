@@ -1,5 +1,5 @@
 import { api } from './api.js';
-import { onSettings, setSetting, settings } from './settings.js';
+import { onSettings, pageAnim, setSetting, settings } from './settings.js';
 import { toast } from './ui.js';
 import { clamp, h, icon } from './util.js';
 import { clearMarks, markMatches } from './search.js';
@@ -432,7 +432,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
     heading = { i: to, t: Date.now() };
     pendingIdx = -1;
     userStamp++; // a turn cancels the settling of an earlier jump
-    scroller.scrollTo({ left: to * geo.vw, behavior: settings.pagedAnimation !== false ? 'smooth' : 'instant' });
+    scroller.scrollTo({ left: to * geo.vw, behavior: pageAnim() !== 'off' ? 'smooth' : 'instant' });
   }
   let wheelAt = 0;
   function onWheel(e) {

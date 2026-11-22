@@ -57,7 +57,7 @@ export async function copyText(text) {
 }
 
 /** One merged box per text line (a selection reports many overlapping boxes). */
-function mergeLines(rects) {
+export function mergeLines(rects) {
   const sorted = [...rects].sort((a, b) => a[1] - b[1] || a[0] - b[0]);
   const out = [];
   for (const r of sorted) {
