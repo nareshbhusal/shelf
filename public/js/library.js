@@ -579,6 +579,7 @@ export function createLibraryView(route) {
         tagChips(book),
       ),
     );
+    if (canFlip(book)) card.addEventListener('flip-request', flipHere); // Space on a hovered book (see onKey)
     card.addEventListener('dragstart', (e) => carryBooks(e, selected.has(book.id) ? [...selected] : [book.id]));
     if (isList) wireDrag(card, book);
     return card;
@@ -858,6 +859,14 @@ export function createLibraryView(route) {
     const tag = e.target?.tagName;
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
     if (document.getElementById('modal-root').childElementCount) return;
+    if (e.key === ' ' && settings.flipPeek && settings.flipSpace && tag !== 'BUTTON' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && !document.querySelector('.flip-layer, .popmenu')) {
+      const hovered = [...root.querySelectorAll('.card.book:hover')].pop(); // the book under the pointer, if it can be flipped through
+      if (hovered) {
+        e.preventDefault();
+        hovered.dispatchEvent(new Event('flip-request'));
+      }
+      return;
+    }
     if (isList && (e.key === 'Delete' || e.key === 'Backspace') && selected.size) {
       e.preventDefault();
       removeFromList([...selected]);

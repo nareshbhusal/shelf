@@ -302,18 +302,25 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   stays off for touch screens, the list layout and "reduce motion". It is all drawing; nothing is written to a book.
 - **Card effects** (Settings > Card effects). Each effect that costs graphics work can be switched off on its own:
   books as solids (page edges, spine and thickness, the heaviest), spine colour sampled from the cover, pointer
-  tilt, tilt shading, cover shadow, blurred badges, ribbon shadow, and card transitions. The progress style
+  tilt, tilt shading, cover shadow, blurred badges, ribbon shadow, and card transitions. The flip-through viewer (below)
+  has three switches of its own: the viewer itself, its button on covers, and Space. The progress style
   (ribbon, bar, or only on hover) is in Settings > Library. If scrolling or hovering feels heavy on a big library or an
   older machine, start with "Books as solids", then tilt.
 - **Flip through a book from its card.** Hover a PDF or comic card and press the pages button on the cover (or use
-  "Flip through" in the card's menu) to leaf through it without opening the reader. The book lifts out of the shelf into
-  a large pane in front of it (the shelf dims behind, and the card's own cover stays where it was), so the pages are big
-  enough to read. The cover opens and it starts at the page you stopped on. `→` `←`, a click on the right or left of the
-  page, the mouse wheel, or the scrubber beneath turn pages (with a 3D leaf); `Home`/`End` jump; `Enter` or "Open in reader"
-  carries on in the reader at that page; `Esc`, the close button or a click on the dimmed shelf puts the book back. Pages
-  are drawn on the server one at a time, at the size of the pane, and kept in a small cache, so nothing is saved or written, and
-  your reading position is not changed. EPUBs can't be flipped (their pages only exist once laid out in the reader) and
-  neither can PDFs over 120 MB. Turn it off in Settings > Card effects.
+  "Flip through" in the card's menu, or press Space while the pointer is on the book) to leaf through it without opening the reader. The book lifts out of the shelf into
+  a large one in front of it (the shelf dims behind, and the card's own cover stays where it was). It is a whole book: a
+  closed cover in the colour of the spine whose board swings open to a two-page spread with the fold drawn as in the reader's two-page mode (a hairline and a soft shadow either side), a stack of paper edge on each side (left the pages you have read, right the ones still to come, each as thick
+  as that many pages, and the whole book as thick as its page count, like the card), the endpaper inside the covers, and
+  pages that turn as double-sided leaves hinged at the spine. It opens on the spread of the page you stopped on. `→` `←`
+  (`Space`, a click on the right or left page, a swipe, the mouse wheel or a sideways trackpad swipe) turn a spread; `Home`/`End` jump to the first and last; the scrubber
+  beneath goes to any page; `Enter` or "Open in reader" carries on in the reader at the right-hand page; `Esc`, the close
+  button or a click on the dimmed shelf shuts the book and puts it back. Pages are drawn on the server one at a time, at
+  the size they are shown, and kept in a small cache, so nothing is saved or written, and your reading position is not
+  changed. Pages are laid out left to right (a right-to-left manga reads in the other direction, which this doesn't
+  mirror). EPUBs can't be flipped (their pages only exist once laid out in the reader) and neither can PDFs over 120 MB.
+  Settings > Card effects turns the viewer off, hides its button on covers (it stays in the card menu, and on Space) or
+  stops Space from opening it. A turning leaf has two pages, and which one shows is switched at the quarter turn by the
+  page itself rather than left to the browser's 3D, so the page being left and the page arriving never show through each other.
 - **Work done once.** A cover's spine colour (its average colour) is worked out on the server when the cover is first
   made and kept in the data folder's database (table `cover_colour`; nothing in the library), so the shelf gets it with the book
   list instead of every card reading the picture's pixels each time it is drawn. It is dropped and made again when a cover is

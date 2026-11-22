@@ -640,7 +640,7 @@ html[data-reader-bg="paper"] .epub-sheet, html[data-reader-bg="theme"][data-them
 a.stitle:hover { color: var(--accent); text-decoration: none; }
 .ssub { font-size: .8rem; color: var(--muted); }
 .chip-mini { font-size: .7rem; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px; white-space: nowrap; flex: none; }
-.sact { display: flex; gap: 2px; flex: none; opacity: .55; }
+.sact { display: flex; gap: 2px; flex: none; opacity: .2; }
 .srow:hover .sact, .sact:focus-within { opacity: 1; }
 .sact .icon-btn[disabled] { opacity: .35; cursor: default; }
 .sact .icon-btn.danger:hover { color: var(--danger, #d33); }
@@ -686,7 +686,7 @@ a.stitle:hover { color: var(--accent); text-decoration: none; }
 .adder-row { display: flex; align-items: center; gap: 12px; width: 100%; padding: 7px 12px; background: none; border: 0; border-bottom: 1px solid var(--line); color: var(--fg); text-align: left; cursor: pointer; }
 .adder-row:last-child { border-bottom: 0; }
 .adder-row:hover, .adder-row.active { background: var(--bg3); }
-.adder-row.done { opacity: .55; cursor: default; }
+.adder-row.done { opacity: .2; cursor: default; }
 .adder-row.loc { color: var(--accent); }
 .adder-thumb { width: 30px; height: 42px; border-radius: 3px; object-fit: cover; background: var(--bg3); flex: none; display: inline-flex; align-items: center; justify-content: center; color: var(--muted); }
 .adder-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -796,29 +796,61 @@ html[data-card-motion="0"] :is(.cover-wrap, .book3d, .book-stage, .ribbon, .badg
 /* ---- flipping through a book from its card (flip.js): the book lifts out in front of the shelf ---- */
 .flipbtn { position: absolute; z-index: 2; bottom: 8px; left: 8px; width: 26px; height: 26px; border-radius: 50%; border: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.62); color: #fff; padding: 0; }
 .card:hover .flipbtn { display: inline-flex; }
-html[data-flip-peek="0"] .flipbtn, .view-list .flipbtn { display: none !important; }
+html[data-flip-peek="0"] .flipbtn, html[data-flip-button="0"] .flipbtn, .view-list .flipbtn { display: none !important; }
 .flip-layer { position: fixed; inset: 0; z-index: 55; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0); transition: background .3s ease-out; user-select: none; }
 .flip-layer.shown { background: rgba(0,0,0,.66); }
 .flip-stage { display: flex; flex-direction: column; align-items: center; gap: 10px; transform-origin: 50% 50%; }
-.flip { position: relative; background: #f2eee2; overflow: hidden; cursor: pointer; border-radius: 2px 4px 4px 2px;
-  box-shadow: 0 22px 60px rgba(0,0,0,.6), 3px 0 0 #e7e1d0, 5px 0 0 #d6cfba, 7px 1px 0 #c6bea6; }
-.flip-page, .flip-leaf { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #f2eee2; }
-.flip-page img, .flip-leaf img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; }
-.flip-page.is-cover img, .flip-leaf.is-cover img { object-fit: cover; }
+.flip-stage { gap: 16px; }
+/* the book: a board (the cover) under the pages, paper stacks either side, and the two pages; --ms is the length of the turn in progress */
+.flip { position: relative; cursor: pointer; touch-action: none; transition: transform var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1); --board: #3a4650; --paper: #f4f0e3; }
+.flip-board { position: absolute; background: linear-gradient(90deg, rgba(0,0,0,.28), rgba(255,255,255,.06) 4%, rgba(0,0,0,0) 12%), color-mix(in srgb, var(--board) 82%, #000);
+  box-shadow: 0 26px 60px rgba(0,0,0,.6), 0 3px 8px rgba(0,0,0,.5), inset 0 0 0 1px rgba(255,255,255,.07); transition: right var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1), left var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1); }
+/* each half casts its shadow outward only, so the two do not shade each other at the spine */
+.flip-board.r { border-radius: 0 5px 5px 0; clip-path: inset(-120px -120px -120px 0); }
+.flip-board.l { border-radius: 5px 0 0 5px; clip-path: inset(-120px 0 -120px -120px); background: linear-gradient(270deg, rgba(0,0,0,.28), rgba(255,255,255,.06) 4%, rgba(0,0,0,0) 12%), color-mix(in srgb, var(--board) 82%, #000); }
+.flip-stack, .flip-tail { position: absolute; transition: left var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1), right var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1), width var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1); }
+.flip-stack { top: 1px; bottom: 0; background: repeating-linear-gradient(90deg, #f3eedf 0 1px, #cfc7af 1px 2px); }
+.flip-stack.l { border-radius: 2px 0 0 2px; box-shadow: inset 6px 0 6px -4px rgba(0,0,0,.45); }
+.flip-stack.r { border-radius: 0 2px 2px 0; box-shadow: inset -6px 0 6px -4px rgba(0,0,0,.45); }
+.flip-tail { background: repeating-linear-gradient(0deg, #f3eedf 0 1px, #cfc7af 1px 2px); box-shadow: inset 0 -3px 4px -2px rgba(0,0,0,.4); }
+.flip-tail.l { border-radius: 0 0 0 2px; } .flip-tail.r { border-radius: 0 0 2px 0; }
+/* the left side only exists once the cover has landed on it (and goes the moment the cover lifts off) */
+.flip:not(.closed) > :is(.lp, .flip-stack.l, .flip-board.l, .flip-tail.l) { transition: opacity calc(var(--ms, 0ms) * .15) ease calc(var(--ms, 0ms) * .8), left var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1), right var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1), width var(--ms, 0ms) cubic-bezier(.45, .05, .25, 1); }
+.flip.closed > :is(.lp, .flip-stack.l, .flip-board.l, .flip-tail.l) { opacity: 0; transition: none; }
+.flip-pg { position: absolute; top: 0; bottom: 0; width: 50%; background: var(--paper); overflow: hidden; }
+.flip-pg.lp { left: 0; border-radius: 2px 0 0 2px; }
+.flip-pg.rp { left: 50%; border-radius: 0 2px 2px 0; }
+.flip-pg.is-cover { top: -7px; bottom: -7px; width: calc(50% + 7px); border-radius: 0 5px 5px 0; background: transparent; }
+.flip-pg img, .flip-face img { display: block; width: 100%; height: 100%; object-fit: contain; pointer-events: none; opacity: .97; }
+.flip-pg.is-cover img, .flip-face.is-cover img { object-fit: cover; opacity: 1; }
+/* the fold, as in the reader's two-page mode: a hairline, and a soft fall-off either side that eases out (each page carries its own half, so a turning leaf takes its half with it) */
+.lp::after, .rp::after { content: ""; position: absolute; top: 0; bottom: 0; width: clamp(14px, 5.2%, 34px); pointer-events: none; mix-blend-mode: multiply; }
+.rp::after { left: 0; background: linear-gradient(90deg, rgba(0,0,0,.2) 0 1px, transparent 1px), linear-gradient(90deg, rgba(0,0,0,.15), rgba(0,0,0,.115) 14%, rgba(0,0,0,.07) 32%, rgba(0,0,0,.035) 56%, rgba(0,0,0,.012) 80%, transparent); }
+.lp::after { right: 0; background: linear-gradient(270deg, rgba(0,0,0,.2) 0 1px, transparent 1px), linear-gradient(270deg, rgba(0,0,0,.15), rgba(0,0,0,.115) 14%, rgba(0,0,0,.07) 32%, rgba(0,0,0,.035) 56%, rgba(0,0,0,.012) 80%, transparent); }
+.is-cover::after { left: 0; right: auto; width: 14%; mix-blend-mode: normal; background: linear-gradient(90deg, rgba(0,0,0,.35), rgba(255,255,255,.1) 3%, rgba(0,0,0,.14) 6%, rgba(0,0,0,0) 14%); }
+.is-end { background: color-mix(in srgb, var(--board) 38%, #efe8d4); }
 .flip-miss { color: #756d5a; font-size: .9rem; }
-.flip-leaf { transform-origin: 0 50%; backface-visibility: hidden; transition: transform var(--ms, 500ms) cubic-bezier(.45, .05, .25, 1); }
-.flip-leaf::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(90deg, rgba(0,0,0,0), rgba(0,0,0,.4)); opacity: 0; transition: opacity var(--ms, 500ms) ease-in-out; }
-.flip-leaf.fwd.go { transform: rotateY(-92deg); }
-.flip-leaf.fwd.go::after { opacity: 1; }
-.flip-leaf.back { transform: rotateY(-92deg); }
-.flip-leaf.back::after { opacity: 1; }
-.flip-leaf.back.go { transform: rotateY(0); }
-.flip-leaf.back.go::after { opacity: 0; }
-.flip.turning > .flip-page::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(90deg, rgba(0,0,0,.3), transparent 50%); }
+/* a leaf: hinged at the spine, a page on each side; --ms is how long it takes */
+.flip-leaf { position: absolute; left: 50%; top: 0; bottom: 0; width: 50%; transform-style: preserve-3d; transform-origin: 0 50%; } /* the swing itself is driven from flip.js, together with which face shows */
+.flip-face { position: absolute; inset: 0; background: var(--paper); -webkit-backface-visibility: hidden; backface-visibility: hidden; overflow: hidden; }
+.flip-face.b { transform: rotateY(180deg); }
+.flip-leaf.cover > .flip-face { inset: -7px -7px -7px 0; border-radius: 0 5px 5px 0; overflow: hidden; }
+.flip-leaf.cover > .flip-face.f { overflow: hidden; box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+.flip-leaf.cover > .flip-face.b { border-radius: 5px 0 0 5px; transform: rotateY(180deg); }
+.flip-face::before { content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; background: #000; opacity: 0; transition: opacity var(--ms, 500ms) ease-in-out; }
+.flip-leaf.fwd > .f::before { opacity: 0; } .flip-leaf.fwd.go > .f::before { opacity: .2; }
+.flip-leaf.fwd > .b::before { opacity: .2; } .flip-leaf.fwd.go > .b::before { opacity: 0; }
+.flip-leaf.back > .f::before { opacity: .2; } .flip-leaf.back.go > .f::before { opacity: 0; }
+.flip-leaf.back > .b::before { opacity: 0; } .flip-leaf.back.go > .b::before { opacity: .2; }
+/* while a leaf is up, the page under it is in its shadow, lightly */
+.flip-pg::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0; }
+.flip-pg.rp::before { background: linear-gradient(90deg, rgba(0,0,0,.12), transparent 55%); }
+.flip-pg.lp::before { background: linear-gradient(270deg, rgba(0,0,0,.12), transparent 55%); }
+.flip.turning > .flip-pg::before { opacity: 1; transition: opacity var(--ms, 500ms) ease-in; }
 .flip-bar { display: flex; align-items: center; gap: 12px; height: 44px; color: #f1eee4; font-size: .85rem; cursor: default; }
 .flip-bar input { flex: 1; min-width: 0; accent-color: var(--accent); }
 .flip-num { font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 6.5em; }
 .flip-btn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border: 0; border-radius: 15px; background: rgba(255,255,255,.14); color: #fff; cursor: pointer; font: inherit; font-size: .8rem; white-space: nowrap; }
 .flip-btn.icon { width: 30px; padding: 0; justify-content: center; }
 .flip-btn:hover, .flip-btn:focus-visible { background: rgba(255,255,255,.26); }
-@media (prefers-reduced-motion: reduce) { .flip-leaf, .flip-leaf::after, .flip-layer, .flip-stage { transition-duration: 1ms !important; } }
+@media (prefers-reduced-motion: reduce) { .flip, .flip-leaf, .flip-face::before, .flip-pg::before, .flip-board, .flip-stack, .flip-tail, .flip-layer, .flip-stage { transition-duration: 1ms !important; transition-delay: 0s !important; } }

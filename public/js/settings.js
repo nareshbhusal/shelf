@@ -71,7 +71,9 @@ const SCHEMA = [
       { key: 'badgeBlur', label: 'Frosted format and page badges', type: 'checkbox', default: true },
       { key: 'ribbonShadow', label: 'Shadow under bookmark ribbons', type: 'checkbox', default: true },
       { key: 'cardMotion', label: 'Animated card motion (lift, ease, ribbon growth)', type: 'checkbox', default: true },
-      { key: 'flipPeek', label: 'Flip through books on their cards', type: 'checkbox', default: true },
+      { key: 'flipPeek', label: 'Flip-through viewer: leaf through a PDF or comic as an open book, right on the shelf', type: 'checkbox', default: true },
+      { key: 'flipButton', label: 'Show its button on covers (also in the card menu)', type: 'checkbox', default: true },
+      { key: 'flipSpace', label: 'Space opens it for the book under the pointer', type: 'checkbox', default: true },
     ],
   },
   {
@@ -209,7 +211,7 @@ export function applySettings() {
   for (const k of CARD_PARTS) root.dataset[k] = s[k] = cardPart(k, s[k]);
   root.dataset.pageEdge = s.pageEdge ? '1' : '0';
   root.dataset.cardTilt = s.cardTilt ? '1' : '0';
-  for (const k of ['spineColour', 'cardShade', 'coverShadow', 'badgeBlur', 'ribbonShadow', 'cardMotion', 'flipPeek']) root.dataset[k] = s[k] ? '1' : '0';
+  for (const k of ['spineColour', 'cardShade', 'coverShadow', 'badgeBlur', 'ribbonShadow', 'cardMotion', 'flipPeek', 'flipButton']) root.dataset[k] = s[k] ? '1' : '0';
   root.dataset.progressStyle = s.progressStyle;
   root.dataset.showFolios = s.showFolios ? '1' : '0';
   const set = (k, v) => root.style.setProperty(k, v);
