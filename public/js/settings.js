@@ -74,6 +74,7 @@ const SCHEMA = [
       { key: 'flipPeek', label: 'Flip-through viewer: leaf through a PDF or comic as an open book, right on the shelf', type: 'checkbox', default: true },
       { key: 'flipButton', label: 'Show its button on covers (also in the card menu)', type: 'checkbox', default: true },
       { key: 'flipSpace', label: 'Space opens it for the book under the pointer', type: 'checkbox', default: true },
+      { key: 'flipDim', label: 'Dimming of the shelf behind the flip-through book (contrast with the book)', type: 'range', min: 0, max: 95, step: 5, unit: '%', default: 66 },
       { key: 'flipSpeed', label: 'Page-turn speed (flip-through viewer and the reader\'s flip)', type: 'range', min: 50, max: 200, step: 10, unit: '%', default: 100 },
     ],
   },

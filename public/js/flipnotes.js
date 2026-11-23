@@ -83,7 +83,7 @@ export function createFlipNotes({ book, pane, layer, changed }) {
     const nh = img.naturalHeight || 1;
     const box = h('div', { class: 'fa-page', dataset: { n } }, annLayer(n, nh / nw));
     box.style.setProperty('--r', String(nw / nh));
-    return box;
+    return h('div', { class: 'fa-fit' }, box); // (the fitting box is the one that measures its parent; the half itself is left alone so its size never depends on it)
   }
   function refresh(n) {
     for (const box of pane.querySelectorAll(`.fa-page[data-n="${n}"]`)) {

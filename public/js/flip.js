@@ -111,8 +111,9 @@ export function openFlip(wrap, book, { open, saved }) {
   );
   const stage = h('div', { class: 'flip-stage' }, pane, bar);
   const layer = h('div', { class: 'flip-layer' }, stage);
+  layer.style.setProperty('--dim', String(Math.min(95, Math.max(0, Number(settings.flipDim ?? 66))) / 100)); // how dark the shelf behind goes (Settings)
   pane.style.setProperty('--board', clothColour());
-  pane.style.setProperty('--land', '0'); // how much of the left half (the cover's edges, the pages read) has arrived: nothing while the book is shut
+  pane.style.setProperty('--land', '0'); // whether the left half of the book (board, edge, pages read) is there itself: not while the book is shut, nor while a cover turns
   pane.style.setProperty('--cast', '0'); // how dark the crease and the landing page are: nothing at rest, most while a leaf stands upright
   document.body.append(layer);
   const notes = book.format === 'pdf' ? createFlipNotes({ book, pane, layer }) : null; // (hoisted use above is only inside functions, which run later)
@@ -179,19 +180,22 @@ export function openFlip(wrap, book, { open, saved }) {
   const onResize = () => fit();
   window.addEventListener('resize', onResize);
 
-  /** Where the board, the paper stacks and the book itself sit for a spread (the book slides so the closed cover is centred). */
-  function layout(s, ms) {
-    const m = MARGIN;
+  /** How thick the paper is on each side of a spread, and the bottom edge of the block. */
+  function edgesOf(s) {
     const closed = s <= 0;
     const T = pw * (0.012 + 0.05 * bulk); // thickness of all the paper
     const leftN = closed ? 0 : Math.min(total, 2 * (s - 1));
     const rightN = total - leftN;
-    const L = closed ? 0 : Math.max(2, T * Math.sqrt(leftN / total));
-    const R = rightN <= 0 ? 0 : Math.max(2, T * Math.sqrt(rightN / total));
+    return { T, L: closed ? 0 : Math.max(2, T * Math.sqrt(leftN / total)), R: rightN <= 0 ? 0 : Math.max(2, T * Math.sqrt(rightN / total)), tail: Math.max(2, Math.round(T * 0.28)) };
+  }
+  /** Where the board, the paper stacks and the book itself sit for a spread (the book slides so the closed cover is centred). */
+  function layout(s, ms) {
+    const m = MARGIN;
+    const closed = s <= 0;
+    const { L, R, tail: tailH } = edgesOf(s);
     pane.style.setProperty('--ms', `${ms}ms`);
     pane.classList.toggle('closed', closed);
     pane.style.transform = closed ? `translateX(${-Math.round(pw / 2)}px)` : 'none';
-    const tailH = Math.max(2, Math.round(T * 0.28));
     // The right half of the board is the book's own; the left half is the cover once it has landed, so it is not there (and does not slide in) before that.
     Object.assign(boardR.style, { top: `${-m}px`, bottom: `${-m - tailH}px`, left: `${pw}px`, right: `${-R - m}px` });
     Object.assign(boardL.style, { top: `${-m}px`, bottom: `${-m - tailH}px`, left: `${-L - m}px`, right: `${pw}px` });
@@ -271,20 +275,22 @@ export function openFlip(wrap, book, { open, saved }) {
     const forward = to > from;
     const front = forward ? rightOf(from) : rightOf(to); // the leaf's page on the right-hand side, flat at the start when going forward
     const back = forward ? leftOf(to) : leftOf(from); // its page on the left-hand side
-    const cover = front === 0;
-    const f = h('div', { class: `flip-face f rp${cover ? ' cover' : ''}` });
-    const b = h('div', { class: `flip-face b lp${cover && back === 'end' ? ' cover' : ''}` }); // when the cover is carried over onto pages further in, its back is a page
+    const cover = front === 0; // the cover is turning (opening or closing, with whatever pages it carries)
+    const f = h('div', { class: `flip-face f rp${cover ? ' hard' : ''}` });
+    // The cover's back lands on the left as the whole left half of the book: the cloth board, the edge of the pages and the bottom of the block drawn on it as they are
+    // on the book itself, so what is there once it has landed is exactly what was turning, with nothing arriving afterwards.
+    const b = h('div', { class: `flip-face b lp${cover ? ' hard' : ''}` });
+    if (cover) {
+      const e = edgesOf(to === 0 ? from : to);
+      b.style.setProperty('--L', `${e.L}px`);
+      b.style.setProperty('--tail', `${e.tail}px`);
+      if (to === 0) pane.style.setProperty('--land', '0'); // closing: the leaf stands in for the left half from the start
+    }
     await Promise.all([fill(front, f), fill(back, b), forward ? fill(rightOf(to), halfR) : fill(leftOf(to), halfL)]);
     if (!pane.isConnected) return;
-    // The cover's edges on the left come and go with the cover itself, not after it: they follow how far round the leaf is.
-    const edges = from === 0 || to === 0;
     const draw = (at) => {
       const turned = swing(f, b, forward, at);
       pane.style.setProperty('--cast', castOf(turned).toFixed(3));
-      if (edges) {
-        const k = Math.min(1, Math.max(0, ((to === 0 ? 1 - at : at) - 0.25) / 0.6));
-        pane.style.setProperty('--land', (k * k * (3 - 2 * k)).toFixed(3));
-      }
     };
     draw(0); // the starting pose, before anything is on the page
     pane.append(f, b);
@@ -295,6 +301,7 @@ export function openFlip(wrap, book, { open, saved }) {
     await Promise.all([fill(leftOf(to), halfL), fill(rightOf(to), halfR)]);
     f.remove();
     b.remove();
+    if (to > 0) pane.style.setProperty('--land', '1'); // the left half is the book's own again, in the same moment
     pane.classList.remove('turning');
   }
 

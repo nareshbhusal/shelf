@@ -798,7 +798,7 @@ html[data-card-motion="0"] :is(.cover-wrap, .book3d, .book-stage, .ribbon, .badg
 .card:hover .flipbtn { display: inline-flex; }
 html[data-flip-peek="0"] .flipbtn, html[data-flip-button="0"] .flipbtn, .view-list .flipbtn { display: none !important; }
 .flip-layer { position: fixed; inset: 0; z-index: 55; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0); transition: background .3s ease-out; user-select: none; }
-.flip-layer.shown { background: rgba(0,0,0,.66); }
+.flip-layer.shown { background: rgba(0,0,0,var(--dim, .66)); }
 .flip-stage { display: flex; flex-direction: column; align-items: center; gap: 10px; transform-origin: 50% 50%; }
 .flip-stage { gap: 16px; }
 /* the book: a board (the cover) under the pages, paper stacks either side, and the two pages; --ms is the length of the turn in progress */
@@ -833,13 +833,16 @@ html[data-flip-peek="0"] .flipbtn, html[data-flip-button="0"] .flipbtn, .view-li
 .flip-face { position: absolute; top: 0; bottom: 0; width: 50%; background: var(--paper); overflow: hidden; will-change: transform; }
 .flip-face.f { left: 50%; transform-origin: 0 50%; }
 .flip-face.b { left: 0; transform-origin: 100% 50%; }
-.flip-face.cover { top: -7px; bottom: -7px; }
-.flip-face.cover.f { width: calc(50% + 7px); border-radius: 0 5px 5px 0; box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
-.flip-face.cover.b { left: -7px; width: calc(50% + 7px); border-radius: 5px 0 0 5px; }
+.flip-face.hard { top: -7px; bottom: -7px; }
+.flip-face.hard.f { width: calc(50% + 7px); border-radius: 0 5px 5px 0; box-shadow: 0 0 0 1px rgba(0,0,0,.35); }
+.flip-face.hard.b { left: calc(-7px - var(--L, 2px)); width: calc(50% + 7px + var(--L, 2px)); bottom: calc(-7px - var(--tail, 3px)); border-radius: 5px 0 0 5px; }
 .flip-face::before { content: ""; position: absolute; inset: 0; z-index: 2; pointer-events: none; background: #000; opacity: var(--shade, 0); }
 /* the inside of the cover: paper pasted on the board, with a faint woven pattern and a border of the cloth around it (defined after the pages' own paper so it wins) */
 .flip-pg.is-end, .flip-face.is-end { background: repeating-linear-gradient(45deg, rgba(255,255,255,.2) 0 1px, transparent 1px 5px), repeating-linear-gradient(-45deg, rgba(0,0,0,.04) 0 1px, transparent 1px 5px), var(--endpaper); }
-.flip-face.cover.b { box-shadow: inset 7px 0 0 var(--cloth), inset 0 7px 0 var(--cloth), inset 0 -7px 0 var(--cloth); }
+/* the cover's back, drawn as the left half of the book is: cloth all round, the edge of the page block inside it on the left and along the bottom, then the page */
+.flip-face.hard.b { box-shadow: inset 7px 0 0 var(--cloth), inset 0 7px 0 var(--cloth), inset 0 -7px 0 var(--cloth), inset calc(7px + var(--L, 2px)) 0 0 #e2dbc5, inset 0 calc(-7px - var(--tail, 3px)) 0 #e2dbc5; }
+.flip-face.hard.b > img, .flip-face.hard.b > .fa-fit { position: absolute; left: calc(7px + var(--L, 2px)); top: 7px; right: 0; bottom: calc(7px + var(--tail, 3px)); width: auto; height: auto; }
+.flip-face.hard.b > img { width: calc(100% - 7px - var(--L, 2px)); height: calc(100% - 14px - var(--tail, 3px)); }
 /* while a leaf is up, the page under it is in its shadow, lightly */
 .flip-pg::before { content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: var(--cast, 0); } /* the crease's shade follows the leaf, frame by frame (flip.js) */
 .flip-pg.rp::before { background: linear-gradient(90deg, rgba(0,0,0,.12), transparent 55%); }
@@ -858,7 +861,7 @@ html[data-flip-peek="0"] .flipbtn, html[data-flip-button="0"] .flipbtn, .view-li
 .flip-grip { width: 22px; height: 22px; flex: none; cursor: nwse-resize; touch-action: none; opacity: .7; background: repeating-linear-gradient(135deg, transparent 0 4px, rgba(255,255,255,.75) 4px 5px) no-repeat right bottom / 16px 16px; clip-path: polygon(100% 0, 100% 100%, 0 100%); }
 .flip-grip:hover { opacity: 1; }
 /* selecting and highlighting in the viewer (flipnotes.js): a box the shape of each page picture holds its highlights, note pins and, once at rest, invisible words */
-.flip-pg, .flip-face { container-type: size; }
+.fa-fit { position: absolute; inset: 0; container-type: size; pointer-events: none; }
 .fa-page { position: absolute; inset: 0; margin: auto; width: min(100cqw, calc(100cqh * var(--r, .7))); height: min(100cqh, calc(100cqw / var(--r, .7))); container-type: size; pointer-events: none; }
 .fa-ann, .fa-text { position: absolute; inset: 0; }
 .fa-ann { pointer-events: none; }
