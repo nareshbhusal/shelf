@@ -89,8 +89,8 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       held.set(row, hd);
     }
     const r = row.getBoundingClientRect();
-    const bx = box(g.spine - g.pw, g.top, g.pw + g.pr, g.ph);
-    Object.assign(hd.el.style, { left: `${bx.left - r.left}px`, top: `${bx.top - r.top}px`, width: `${bx.width}px`, height: `${bx.height}px` });
+    // placed where the layout says, unrounded: the browser then rounds it as it rounds the pages next to it
+    Object.assign(hd.el.style, { left: `${g.spine - g.pw - r.left}px`, top: `${g.top - r.top}px`, width: `${g.pw + g.pr}px`, height: `${g.ph}px` });
     hd.el.style.setProperty('--board', cloth());
     hd.el.classList.toggle('closed', g.closed);
     hd.g = g;
@@ -230,6 +230,10 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       pane.className = 'rflip';
       Object.assign(pane.style, { left: `${snap(area.left)}px`, top: `${snap(area.top)}px`, width: `${snap(area.width)}px`, height: `${snap(area.height)}px` });
       pane.style.setProperty('--cw', `${Math.min(23, Math.max(10, area.width * 0.022))}px`); // the reader's crease is 4.4% of the window wide, split between the two pages
+      // the hairline of the crease, placed and drawn as the reader draws its own (same width rule, same centre), so it stays on the same pixel when the turn ends
+      const hair = Object.assign(document.createElement('div'), { className: 'rhair' });
+      hair.style.setProperty('--hw', `${Math.min(46, Math.max(20, area.width * 0.044))}px`);
+      const hairAt = (x, top, height) => Object.assign(hair.style, { left: `${x - area.left}px`, top: `${snap(top) - area.top}px`, height: `${snap(top + height) - snap(top)}px` });
       const pic = (el, side) => {
         const c = img.get(el).cloneNode();
         c.style.objectFit = 'contain';
@@ -238,6 +242,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       };
 
       let draw;
+      let settle = () => {};
       let hide = null;
       if (kind === 'pair') {
         pane.style.perspective = `${Math.round(w * 4.5)}px`;
@@ -251,11 +256,24 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
         const under = part(`flip-pg ${forward ? 'rp' : 'lp'}`, underEl, forward ? RR : LL, forward ? 'r' : 'l');
         const f = part('flip-face f rp', frontEl, RR, 'r');
         const b = part('flip-face b lp', backEl, LL, 'l');
-        pane.append(under, f, b);
+        pane.append(under, f, b, hair);
+        hairAt(mid, Math.min(LL.top, RR.top), Math.max(LL.height, RR.height));
         // the stacks follow the leaf: the paper moves from one side to the other as it turns (they live in the row, behind the pages)
         const ga = withBook ? geomOf(rowA, img) : null;
         const gb = withBook ? geomOf(rowB, img) : null;
         const hd = ga && gb ? held.get(rowA) : null;
+        // when it has landed everything flat is put exactly where the reader's own page is (unrounded, no transform): the browser then rounds it just as it rounds that page,
+        // whichever browser it is, so the page does not shift by a pixel when the overlay goes
+        settle = () => {
+          Object.assign(pane.style, { left: `${area.left}px`, top: `${area.top}px`, width: `${area.width}px`, height: `${area.height}px` });
+          const put = (e, rc) => Object.assign(e.style, { left: `${rc.left - area.left}px`, top: `${rc.top - area.top}px`, width: `${rc.width}px`, height: `${rc.height}px` });
+          put(under, forward ? RR : LL);
+          const landed = forward ? b : f;
+          put(landed, forward ? LL : RR);
+          landed.style.transform = 'none';
+          landed.style.willChange = 'auto';
+          (forward ? f : b).style.visibility = 'hidden';
+        };
         draw = (at) => {
           const turned = swing(f, b, forward, at);
           pane.style.setProperty('--cast', castOf(turned).toFixed(3));
@@ -279,13 +297,23 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
         f.append(pic(frontEl, 'r'));
         b.append(pic(backEl, 'l'));
         bk.append(...decor.all, side, f, b);
-        pane.append(bk);
+        pane.append(bk, hair);
+        settle = () => {
+          Object.assign(pane.style, { left: `${area.left}px`, top: `${area.top}px`, width: `${area.width}px`, height: `${area.height}px` });
+          Object.assign(bk.style, { left: `${g1.spine - g1.pw - area.left}px`, top: `${g1.top - area.top}px`, width: `${g1.pw + g1.pr}px`, height: `${g1.ph}px` });
+          placeDecor(decor, { pw: g1.pw, L: g1.L, R: g1.R, tail: g1.tail });
+          const landed = forward ? b : f;
+          landed.style.transform = 'none';
+          landed.style.willChange = 'auto';
+          (forward ? f : b).style.visibility = 'hidden';
+        };
         draw = (at) => {
           const k = { spine: lerp(g0.spine, g1.spine, at), top: lerp(g0.top, g1.top, at), pw: lerp(g0.pw, g1.pw, at), ph: lerp(g0.ph, g1.ph, at), L: lerp(g0.L, g1.L, at), R: lerp(g0.R, g1.R, at), tail: lerp(g0.tail, g1.tail, at) };
           const pw = snap(k.pw);
           const bx = box(k.spine - pw, k.top, 2 * pw, k.ph);
           Object.assign(bk.style, { left: `${bx.left - area.left}px`, top: `${bx.top - area.top}px`, width: `${bx.width}px`, height: `${bx.height}px`, perspective: `${Math.round(pw * 4.5)}px` });
           placeDecor(decor, { pw, L: k.L, R: k.R, tail: k.tail });
+          hairAt(kind === 'open' ? lerp(g0.spine, mid, at) : lerp(mid, g1.spine, at), bx.top, bx.height);
           const turned = swing(f, b, forward, at);
           pane.style.setProperty('--cast', castOf(turned).toFixed(3));
           pane.style.setProperty('--cr', (forward ? at : 1 - at).toFixed(3)); // a lone cover has no crease; the book makes one as it opens
@@ -298,6 +326,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       root.append(pane);
       try {
         await sweep(turnMs(Math.abs(to - from) === 1 ? 620 : 560), draw);
+        settle();
         if (withBook) paint(rowB, geomOf(rowB, img)); // the book of the row it lands on is there before it is shown
         land(); // under the leaf's final picture the reader moves to the new spread
       } finally {

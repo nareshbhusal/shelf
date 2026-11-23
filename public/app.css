@@ -896,6 +896,11 @@ html[data-flip-peek="0"] .flipbtn, html[data-flip-button="0"] .flipbtn, .view-li
 .rflip img { object-fit: contain; }
 /* the crease as the reader draws it (half on each page, 4.4% of the window across); the page edges and the shadow underneath are the reader's own, from the pages beneath, so they are not drawn a second time */
 .rflip .flip-face::after, .rflip .flip-pg::after { width: var(--cw, 14px); opacity: var(--cr, 1); }
+/* the reader's crease is one hairline straddling the fold, the viewer's is one on each page; here neither page draws its own (the hairline is .rhair, drawn exactly as the reader draws it, so it does not move when the turn ends) */
+.rflip .flip-face.f:not(.is-cover)::after, .rflip .flip-pg.rp::after { background: linear-gradient(90deg, rgba(0,0,0,.15), rgba(0,0,0,.115) 14%, rgba(0,0,0,.07) 32%, rgba(0,0,0,.035) 56%, rgba(0,0,0,.012) 80%, transparent); }
+.rflip .flip-face.b::after, .rflip .flip-pg.lp::after { background: linear-gradient(270deg, rgba(0,0,0,.15), rgba(0,0,0,.115) 14%, rgba(0,0,0,.07) 32%, rgba(0,0,0,.035) 56%, rgba(0,0,0,.012) 80%, transparent); }
+.rflip .rhair { position: absolute; z-index: 5; width: var(--hw, 46px); transform: translateX(-50%); pointer-events: none; mix-blend-mode: multiply; opacity: var(--cr, 1);
+  background: linear-gradient(90deg, transparent calc(50% - .5px), rgba(0,0,0,.2) calc(50% - .5px), rgba(0,0,0,.2) calc(50% + .5px), transparent calc(50% + .5px)); }
 /* the reader's flip mode draws each spread as the flip-through book (readerflip.js puts the pieces behind the pages; their look is the viewer's, above) */
 .rbook { display: block; position: absolute; z-index: -1; pointer-events: none; --board: #3a4650; --cloth: color-mix(in srgb, var(--board) 82%, #000); }
 .rbook.closed > .l { display: none; }
