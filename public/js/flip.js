@@ -2,6 +2,7 @@ import { api, coverUrl } from './api.js';
 import { h, icon } from './util.js';
 import { setSetting, settings } from './settings.js';
 import { castOf, swing, sweep, turnMs } from './leaf.js';
+import { MARGIN, bulkOf, clothOf, edgesOf, makeDecor, placeDecor } from './bookdecor.js';
 import { createFlipNotes } from './flipnotes.js';
 
 // Flipping through a book from its card, without opening the reader. The book lifts out of the shelf into a larger one in front of it (the
@@ -18,7 +19,6 @@ export function closeFlip(animate = false) {
   active?.close(animate);
 }
 
-const MARGIN = 7; // the board of the cover around the pages, in px
 
 /**
  * @param {HTMLElement} wrap  the .cover-wrap of the card (where the book lifts from and settles back to)
@@ -32,7 +32,7 @@ export function openFlip(wrap, book, { open, saved }) {
   const coverImg = wrap.querySelector('img');
   let ar = coverImg?.naturalWidth && coverImg?.naturalHeight ? coverImg.naturalWidth / coverImg.naturalHeight : 0.7; // the shape of one page
   ar = Math.min(1.6, Math.max(0.45, ar));
-  const bulk = Math.min(1, Math.max(0, Math.log(total / 20) / Math.log(100))); // as on the card: how thick a book this is
+  const bulk = bulkOf(total); // as on the card: how thick a book this is
   let px = 0;
   const url = (n) => (n === 0 ? coverUrl(book) : `/api/books/${book.id}/peek/${n}?w=${px}&v=${book.fingerprint}`);
 
@@ -86,12 +86,8 @@ export function openFlip(wrap, book, { open, saved }) {
 
   const halfL = h('div', { class: 'flip-pg lp' });
   const halfR = h('div', { class: 'flip-pg rp is-cover' });
-  const boardL = h('div', { class: 'flip-board l' });
-  const boardR = h('div', { class: 'flip-board r' });
-  const stackL = h('div', { class: 'flip-stack l' });
-  const stackR = h('div', { class: 'flip-stack r' });
-  const tailL = h('div', { class: 'flip-tail l' });
-  const tailR = h('div', { class: 'flip-tail r' });
+  const decor = makeDecor();
+  const { boardL, boardR, stackL, stackR, tailL, tailR } = decor;
   const pane = h('div', { class: 'flip closed', role: 'group', 'aria-label': 'Flip through this book' }, boardL, boardR, tailL, tailR, stackL, stackR, halfL, halfR);
   // Where you are, as "n / total". n is the page (or the pair of pages) on show; click it, type a page and press Enter to go there.
   const jump = h('input', { class: 'flip-n', type: 'text', inputmode: 'numeric', autocomplete: 'off', spellcheck: false, 'aria-label': 'Page: type a number and press Enter to go there', title: 'Type a page number and press Enter' });
@@ -118,45 +114,8 @@ export function openFlip(wrap, book, { open, saved }) {
   document.body.append(layer);
   const notes = book.format === 'pdf' ? createFlipNotes({ book, pane, layer }) : null; // (hoisted use above is only inside functions, which run later)
 
-  /** The colour of the hardcover's cloth: the book's spine colour (the average of its cover, the one the card's spine already shows), deepened so it reads as
-   *  cloth. A book with no colour yet is measured from its cover here; and failing that, it gets a steady colour of its own from its name, never one shared by all. */
   function clothColour() {
-    let rgb = null;
-    const fromText = (t) => { const m = /(\d+)\D+(\d+)\D+(\d+)/.exec(t || ''); return m ? [+m[1], +m[2], +m[3]] : null; };
-    rgb = fromText(wrap.closest('.book-stage')?.style.getPropertyValue('--spine')) || fromText(book.spine);
-    if (!rgb && coverImg?.complete && coverImg.naturalWidth) {
-      try {
-        const c = document.createElement('canvas');
-        c.width = c.height = 4;
-        const g = c.getContext('2d', { willReadFrequently: true });
-        g.drawImage(coverImg, 0, 0, 4, 4);
-        const d = g.getImageData(0, 0, 4, 4).data;
-        rgb = [0, 0, 0];
-        for (let i = 0; i < d.length; i += 4) { rgb[0] += d[i]; rgb[1] += d[i + 1]; rgb[2] += d[i + 2]; }
-        rgb = rgb.map((v) => Math.round(v / 16));
-      } catch { rgb = null; }
-    }
-    let hue;
-    let sat;
-    let lig;
-    if (rgb) {
-      const [r, g, b] = rgb.map((v) => v / 255);
-      const mx = Math.max(r, g, b);
-      const mn = Math.min(r, g, b);
-      lig = (mx + mn) / 2;
-      const d = mx - mn;
-      sat = d === 0 ? 0 : d / (1 - Math.abs(2 * lig - 1));
-      hue = d === 0 ? 0 : mx === r ? ((g - b) / d + (g < b ? 6 : 0)) * 60 : mx === g ? ((b - r) / d + 2) * 60 : ((r - g) / d + 4) * 60;
-      sat = sat < 0.08 ? sat : Math.min(0.7, sat * 1.12 + 0.03); // a little richer, if it has any colour at all
-    } else {
-      let hsh = 0;
-      for (const ch of `${book.title || ''}${book.filename || book.path || ''}`) hsh = (hsh * 31 + ch.charCodeAt(0)) >>> 0;
-      hue = hsh % 360;
-      sat = 0.32;
-      lig = 0.3;
-    }
-    lig = Math.min(0.4, Math.max(0.2, lig)); // cloth is never white and never black
-    return `hsl(${Math.round(hue)} ${Math.round(sat * 100)}% ${Math.round(lig * 100)}%)`;
+    return clothOf(book, { spineText: wrap.closest('.book-stage')?.style.getPropertyValue('--spine'), coverImg });
   }
 
   /** Fits the book to the window: as tall as it can be, in the shape of the book's pages, two pages wide with room for the stacks. */
@@ -181,28 +140,18 @@ export function openFlip(wrap, book, { open, saved }) {
   window.addEventListener('resize', onResize);
 
   /** How thick the paper is on each side of a spread, and the bottom edge of the block. */
-  function edgesOf(s) {
-    const closed = s <= 0;
-    const T = pw * (0.012 + 0.05 * bulk); // thickness of all the paper
-    const leftN = closed ? 0 : Math.min(total, 2 * (s - 1));
-    const rightN = total - leftN;
-    return { T, L: closed ? 0 : Math.max(2, T * Math.sqrt(leftN / total)), R: rightN <= 0 ? 0 : Math.max(2, T * Math.sqrt(rightN / total)), tail: Math.max(2, Math.round(T * 0.28)) };
+  function edgesAt(s) {
+    return edgesOf({ pw, total, bulk, leftN: s <= 0 ? 0 : Math.min(total, 2 * (s - 1)) });
   }
   /** Where the board, the paper stacks and the book itself sit for a spread (the book slides so the closed cover is centred). */
   function layout(s, ms) {
-    const m = MARGIN;
     const closed = s <= 0;
-    const { L, R, tail: tailH } = edgesOf(s);
+    const { L, R, tail: tailH } = edgesAt(s);
     pane.style.setProperty('--ms', `${ms}ms`);
     pane.classList.toggle('closed', closed);
     pane.style.transform = closed ? `translateX(${-Math.round(pw / 2)}px)` : 'none';
     // The right half of the board is the book's own; the left half is the cover once it has landed, so it is not there (and does not slide in) before that.
-    Object.assign(boardR.style, { top: `${-m}px`, bottom: `${-m - tailH}px`, left: `${pw}px`, right: `${-R - m}px` });
-    Object.assign(boardL.style, { top: `${-m}px`, bottom: `${-m - tailH}px`, left: `${-L - m}px`, right: `${pw}px` });
-    Object.assign(stackL.style, { left: `${-L}px`, width: `${L}px` });
-    Object.assign(stackR.style, { right: `${-R}px`, width: `${R}px` });
-    Object.assign(tailR.style, { left: `${pw}px`, right: `${-R}px`, height: `${tailH}px`, bottom: `${-tailH}px` });
-    Object.assign(tailL.style, { left: `${-L}px`, right: `${pw}px`, height: `${tailH}px`, bottom: `${-tailH}px` });
+    placeDecor(decor, { pw, L, R, tail: tailH });
   }
   fit();
 
@@ -281,7 +230,7 @@ export function openFlip(wrap, book, { open, saved }) {
     // on the book itself, so what is there once it has landed is exactly what was turning, with nothing arriving afterwards.
     const b = h('div', { class: `flip-face b lp${cover ? ' hard' : ''}` });
     if (cover) {
-      const e = edgesOf(to === 0 ? from : to);
+      const e = edgesAt(to === 0 ? from : to);
       b.style.setProperty('--L', `${e.L}px`);
       b.style.setProperty('--tail', `${e.tail}px`);
       if (to === 0) pane.style.setProperty('--land', '0'); // closing: the leaf stands in for the left half from the start

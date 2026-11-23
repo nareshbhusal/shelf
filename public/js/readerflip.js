@@ -1,31 +1,126 @@
 import { castOf, swing, sweep, turnMs, reduceMotion } from './leaf.js';
+import { MARGIN, bulkOf, edgesOf, makeDecor, placeDecor } from './bookdecor.js';
 
-// The reader's "flip" page turn, for the two-pages-side-by-side layout: a leaf, hinged at the spine, swings over the spread exactly as in the flip-through viewer
-// (the leaf, its shading and its timing are leaf.js, shared). The reader's own pages stay where they are underneath; a small overlay holds only what moves: the leaf
-// and the page it uncovers. The pictures on it are the server's page pictures (the ones the viewer uses), so they can be there before the reader has drawn those pages.
-// When the leaf has landed the reader jumps (unseen) to the new spread and the overlay goes. Anything it can't do well (right-to-left, a lone page such as the
-// cover, a page that won't load in time) is left to the normal slide, which the caller falls back to.
+// The reader's "flip" mode, for the two-pages-side-by-side layout. Two things:
+//
+// 1. The book. At rest, every spread of two pages (and the lone cover) is drawn as the flip-through viewer draws its book: the cloth board under the pages, the stacks of
+//    paper beside them (thicker on the side you have still to read) and the bottom edge of the block. The pieces and where they go are bookdecor.js, shared with the viewer.
+//    They sit in each row of the reader, behind the pages.
+// 2. The turn. A leaf, hinged at the spine, swings over the spread exactly as in the viewer (leaf.js is shared too). The reader's own pages stay where they are underneath;
+//    a small overlay holds only what moves: the leaf and the page it uncovers, while the stacks change thickness in the row itself. Opening and closing the cover is the
+//    viewer's own: the cover is the leaf, the whole book slides and changes size as it opens, and the overlay then draws the whole book (cloth, stacks, the cover's back).
+//    The pictures on the overlay are the server's page pictures (the ones the viewer uses), so they can be there before the reader has drawn those pages.
+// When the leaf has landed the reader jumps (unseen) to the new spread and the overlay goes. Anything it can't do well (right-to-left, a lone page that is not the cover,
+// a page that won't load in time) is left to the normal slide, which the caller falls back to.
 
 /** Where the picture of a page really is inside its element (a comic page is fitted into half the window, tucked toward the spine). */
-function pictureRect(el) {
+function pictureRect(el, like) {
   const r = el.getBoundingClientRect();
-  if (el.tagName !== 'IMG' || !el.naturalWidth) return r;
-  const k = Math.min(r.width / el.naturalWidth, r.height / el.naturalHeight);
-  const w = el.naturalWidth * k;
-  const hh = el.naturalHeight * k;
+  // a comic page that is not drawn yet (the next spread, off screen) has the shape of the picture the server sent for it
+  const nw = el.naturalWidth || like?.naturalWidth;
+  const nh = el.naturalHeight || like?.naturalHeight;
+  if (el.tagName !== 'IMG' || !nw) return r;
+  const k = Math.min(r.width / nw, r.height / nh);
+  const w = nw * k;
+  const hh = nh * k;
   const [px, py] = getComputedStyle(el).objectPosition.split(' ').map((v) => (parseFloat(v) / 100));
   return { left: r.left + (r.width - w) * (Number.isFinite(px) ? px : 0.5), top: r.top + (r.height - hh) * (Number.isFinite(py) ? py : 0.5), width: w, height: hh };
 }
+const lerp = (a, b, t) => a + (b - a) * t;
 
 /**
- * @param {{ root: HTMLElement, pagesEl: HTMLElement, scroller: HTMLElement, peekUrl: (pageEl: HTMLElement, width: number) => string | null }} o
+ * @param {{ root: HTMLElement, pagesEl: HTMLElement, scroller: HTMLElement, peekUrl: (pageEl: HTMLElement, width: number) => string | null,
+ *   total: () => number, bound: () => boolean, cloth: () => string }} o
  */
-export function createReaderFlip({ root, pagesEl, scroller, peekUrl }) {
+export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, bound, cloth }) {
   const rows = () => [...pagesEl.querySelectorAll(':scope > .spread')];
   const pagesOf = (row) => [...(row?.children ?? [])].filter((c) => c.dataset?.page);
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const widthFor = (rect) => Math.min(1400, Math.max(320, Math.ceil((rect.width * dpr) / 40) * 40));
+  // the browser paints a page's box on whole device pixels; a box placed by a script at a fraction of one is drawn blurred and a hair off, which shows as a lift
+  const snap = (v) => Math.round(v * dpr) / dpr;
+  const box = (left, top, width, height) => { const L = snap(left); const T = snap(top); return { left: L, top: T, width: snap(left + width) - L, height: snap(top + height) - T }; };
+  const widthFor = (rect) => Math.min(1400, Math.max(320, Math.round(rect.width * dpr))); // as many pixels as it will be shown at, so it is not scaled again
 
+  // ------------------------------------------------------------------ the book at rest
+  /**
+   * Where the book is in a row, as the viewer lays it out (viewport coordinates): `spine` and the page size, the thickness of the stacks, the bottom edge. The lone cover
+   * is drawn like the viewer's closed book, whose cover overhangs the board by MARGIN on three sides; a lone page elsewhere (the last) and a double-width page are not a book here.
+   */
+  function geomOf(row, like) {
+    const t = total();
+    if (!row || !t || row.classList.contains('wide')) return null;
+    const bulk = bulkOf(t);
+    const pg = pagesOf(row);
+    if (pg.length === 2) {
+      const a = pictureRect(pg[0], like?.get(pg[0]));
+      const b = pictureRect(pg[1], like?.get(pg[1]));
+      if (a.width < 40 || b.width < 40) return null;
+      const top = Math.min(a.top, b.top);
+      const bottom = Math.max(a.top + a.height, b.top + b.height);
+      const pw = a.width;
+      return { closed: false, spine: b.left, top, pw, pr: b.width, ph: bottom - top, ...edgesOf({ pw: (a.width + b.width) / 2, total: t, bulk, leftN: Number(pg[0].dataset.page) || 1 }) };
+    }
+    if (pg.length === 1 && row.classList.contains('lone') && Number(pg[0].dataset.page) === 1) {
+      const c = pictureRect(pg[0], like?.get(pg[0]));
+      if (c.width < 40 || c.height < 40) return null;
+      const pw = c.width - MARGIN;
+      return { closed: true, spine: c.left, top: c.top + MARGIN, pw, pr: pw, ph: c.height - 2 * MARGIN, cover: c, ...edgesOf({ pw, total: t, bulk, leftN: 0 }) };
+    }
+    return null;
+  }
+
+  const held = new WeakMap(); // row -> { el, d }
+  /** Draws the book into a row (or takes it away, with g = null). */
+  function paint(row, g) {
+    let hd = held.get(row);
+    if (!g || !bound()) {
+      if (hd) { hd.el.remove(); held.delete(row); }
+      row.style.removeProperty('--cl');
+      return;
+    }
+    if (!hd) {
+      const d = makeDecor();
+      const el = document.createElement('i'); // not a div or an img, so the pages are still the first and last of their kind in the row
+      el.className = 'rbook';
+      el.setAttribute('aria-hidden', 'true');
+      el.append(...d.all);
+      row.prepend(el);
+      hd = { el, d };
+      held.set(row, hd);
+    }
+    const r = row.getBoundingClientRect();
+    const bx = box(g.spine - g.pw, g.top, g.pw + g.pr, g.ph);
+    Object.assign(hd.el.style, { left: `${bx.left - r.left}px`, top: `${bx.top - r.top}px`, width: `${bx.width}px`, height: `${bx.height}px` });
+    hd.el.style.setProperty('--board', cloth());
+    hd.el.classList.toggle('closed', g.closed);
+    hd.g = g;
+    placeDecor(hd.d, { pw: g.pw, L: g.L, R: g.R, tail: g.tail });
+    if (g.closed) { // the lone cover: a hinge shading along its left edge, as on the viewer's cover (drawn by CSS from these)
+      row.style.setProperty('--cl', `${g.cover.left - r.left}px`);
+      row.style.setProperty('--ct', `${g.cover.top - r.top}px`);
+      row.style.setProperty('--ch', `${g.cover.height}px`);
+      row.style.setProperty('--cw', `${g.cover.width}px`);
+    } else row.style.removeProperty('--cl');
+  }
+  let near = [0, 0];
+  let timer = 0;
+  /** Draws the book into the rows that are on or next to the screen (all of them would be a lot to measure for a long book). `i` is the slot you are at. */
+  function decorate(i = near[0], span = 3) {
+    near = [i, span];
+    cancelAnimationFrame(timer);
+    const rs = rows();
+    for (let j = 0; j < rs.length; j++) {
+      if (Math.abs(j - i) <= span) paint(rs[j], bound() ? geomOf(rs[j]) : null);
+      else if (held.has(rs[j]) || !bound()) paint(rs[j], null);
+    }
+  }
+  const later = () => { cancelAnimationFrame(timer); timer = requestAnimationFrame(() => decorate()); };
+  // pictures arriving change where a comic page's picture really is
+  pagesEl.addEventListener('load', later, true);
+  const mo = new MutationObserver(() => { if (bound()) later(); });
+  mo.observe(pagesEl, { childList: true });
+
+  // ------------------------------------------------------------------ the turn
   const pics = new Map();
   const load = (url) => {
     let p = pics.get(url);
@@ -57,59 +152,165 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl }) {
   /**
    * Turns from slot `from` to slot `to`. `land()` moves the reader to the new slot, instantly. Resolves true once it has turned, or false at once if it can't (nothing
    * was changed then, and the caller slides instead).
+   *
+   * Two kinds of turn. Between two spreads the hinge (the spine) stays put and the leaf swings over it. Between the cover, which stands alone in the middle of the window,
+   * and the first spread, the cover is the leaf: it is hinged at its own left edge and the whole book slides across as it turns, so the hinge ends up in the middle,
+   * exactly as the flip-through viewer opens its cover. Its back is then the first page of the spread (the next one is the page it uncovers). In reverse it closes onto the lone cover.
    */
   async function turn(from, to, count, land) {
     if (busy || reduceMotion()) return false;
     const rs = rows();
     if (rs.length !== count) return false; // another layout (several parts, scrolling): not here
-    const [oL, oR] = pagesOf(rs[from]);
-    const [nL, nR] = pagesOf(rs[to]);
-    if (pagesOf(rs[from]).length !== 2 || pagesOf(rs[to]).length !== 2 || rs[from].classList.contains('lone') || rs[to].classList.contains('lone')) return false;
+    const rowA = rs[from];
+    const rowB = rs[to];
+    const pa = pagesOf(rowA);
+    const pb = pagesOf(rowB);
+    const loneA = rowA.classList.contains('lone');
+    const loneB = rowB.classList.contains('lone');
+    if (rowA.classList.contains('wide') || rowB.classList.contains('wide')) return false;
+    let kind = 'pair'; // pair -> pair
+    if (loneA || loneB) {
+      if (from === 0 && loneA && !loneB && pa.length === 1 && pb.length === 2) kind = 'open';
+      else if (to === 0 && loneB && !loneA && pb.length === 1 && pa.length === 2) kind = 'close';
+      else return false; // a lone page elsewhere (the last one): slide
+    } else if (pa.length !== 2 || pb.length !== 2) return false;
     const forward = to > from;
-    const LL = pictureRect(oL);
-    const RR = pictureRect(oR);
     const area = scroller.getBoundingClientRect();
-    if (RR.right < area.left || RR.left > area.right || LL.width < 40 || RR.width < 40) return false;
-    const frontEl = forward ? oR : nR; // the leaf's page on the right-hand side at the start
-    const backEl = forward ? nL : oL; // its page on the left-hand side at the end
-    const underEl = forward ? nR : nL; // the page the leaf uncovers
+    const mid = area.left + area.width / 2;
+    const withBook = bound();
+
+    // who is who: the leaf's page on the right at the start (frontEl), its page on the left at the end (backEl), the page it uncovers (underEl), a page that simply stays (restEl)
+    let frontEl, backEl, underEl = null, restEl = null;
+    let LL, RR; // where a left and a right page are, as pictures, around the hinge (RR is just right of it)
+    let spine = mid;
+    let g0 = null; // the book's own geometry at the start and at the end of a cover turn (see geomOf)
+    let g1 = null;
+    if (kind === 'pair') {
+      const [oL, oR] = pa;
+      const [nL, nR] = pb;
+      LL = pictureRect(oL);
+      RR = pictureRect(oR);
+      spine = oR.getBoundingClientRect().left;
+      frontEl = forward ? oR : nR;
+      backEl = forward ? nL : oL;
+      underEl = forward ? nR : nL;
+      if (RR.right < area.left || RR.left > area.right || LL.width < 40 || RR.width < 40) return false;
+    } else {
+      const cover = kind === 'open' ? pa[0] : pb[0];
+      const [pL, pR] = kind === 'open' ? pb : pa;
+      const cr = pictureRect(cover);
+      if (cr.width < 40) return false;
+      // the lone cover is fitted to the window on its own, so it is a little bigger than a page of a pair: the whole book changes size, smoothly, as it opens
+      RR = { left: spine, top: cr.top, width: cr.width, height: cr.height };
+      LL = RR;
+      frontEl = cover;
+      backEl = pL;
+      if (kind === 'open') underEl = pR;
+      else restEl = pR;
+    }
+    const w = RR.width;
+
     busy = true;
     try {
-      const urls = [frontEl, backEl, underEl].map(urlOf);
+      const wanted = [frontEl, backEl, underEl, restEl].filter(Boolean);
+      const urls = wanted.map(urlOf);
       if (urls.some((u) => !u)) return false;
-      const [fi, bi, ui] = await within(Promise.all(urls.map(load)), 400);
-      if (!fi || !bi || !ui) return false;
-      const spine = oR.getBoundingClientRect().left;
+      const got = await within(Promise.all(urls.map(load)), 400);
+      if (!got || got.some((g) => !g)) return false;
+      const img = new Map(wanted.map((el, k) => [el, got[k]]));
+      if (kind !== 'pair') {
+        // the other row is a window's width away in the strip: seen from where this one is, it will be where this one is once the reader has moved
+        const away = (g, row) => (g ? { ...g, spine: g.spine + rowA.getBoundingClientRect().left - row.getBoundingClientRect().left } : g);
+        const gc = away(geomOf(kind === 'open' ? rowA : rowB, img), kind === 'open' ? rowA : rowB);
+        const gp = away(geomOf(kind === 'open' ? rowB : rowA, img), kind === 'open' ? rowB : rowA);
+        [g0, g1] = kind === 'open' ? [gc, gp] : [gp, gc];
+        if (!g0 || !g1) return false;
+      }
       const pane = document.createElement('div');
       pane.className = 'rflip';
-      Object.assign(pane.style, { left: `${area.left}px`, top: `${area.top}px`, width: `${area.width}px`, height: `${area.height}px`, perspective: `${Math.round(RR.width * 4.5)}px` });
-      const place = (el, rect, originX) => {
-        Object.assign(el.style, { left: `${rect.left - area.left}px`, top: `${rect.top - area.top}px`, width: `${rect.width}px`, height: `${rect.height}px`, bottom: 'auto', transformOrigin: `${originX}px 50%` });
-        return el;
+      Object.assign(pane.style, { left: `${snap(area.left)}px`, top: `${snap(area.top)}px`, width: `${snap(area.width)}px`, height: `${snap(area.height)}px` });
+      pane.style.setProperty('--cw', `${Math.min(23, Math.max(10, area.width * 0.022))}px`); // the reader's crease is 4.4% of the window wide, split between the two pages
+      const pic = (el, side) => {
+        const c = img.get(el).cloneNode();
+        c.style.objectFit = 'contain';
+        c.style.objectPosition = side === 'r' ? 'left center' : 'right center';
+        return c;
       };
-      const pic = (img) => { const c = img.cloneNode(); c.style.objectFit = 'fill'; return c; };
-      const under = place(Object.assign(document.createElement('div'), { className: `flip-pg ${forward ? 'rp' : 'lp'}` }), forward ? RR : LL, 0);
-      under.append(pic(ui));
-      const f = place(Object.assign(document.createElement('div'), { className: 'flip-face f' }), RR, spine - RR.left);
-      const b = place(Object.assign(document.createElement('div'), { className: 'flip-face b' }), LL, spine - LL.left);
-      f.append(pic(fi));
-      b.append(pic(bi));
-      pane.append(under, f, b);
-      const draw = (at) => {
-        const turned = swing(f, b, forward, at);
-        pane.style.setProperty('--cast', castOf(turned).toFixed(3));
-      };
+
+      let draw;
+      let hide = null;
+      if (kind === 'pair') {
+        pane.style.perspective = `${Math.round(w * 4.5)}px`;
+        const part = (cls, el, rc, side) => {
+          const e = Object.assign(document.createElement('div'), { className: cls });
+          const bx = box(rc.left, rc.top, rc.width, rc.height);
+          Object.assign(e.style, { left: `${bx.left - area.left}px`, top: `${bx.top - area.top}px`, width: `${bx.width}px`, height: `${bx.height}px`, bottom: 'auto', transformOrigin: `${spine - rc.left}px 50%` });
+          e.append(pic(el, side));
+          return e;
+        };
+        const under = part(`flip-pg ${forward ? 'rp' : 'lp'}`, underEl, forward ? RR : LL, forward ? 'r' : 'l');
+        const f = part('flip-face f rp', frontEl, RR, 'r');
+        const b = part('flip-face b lp', backEl, LL, 'l');
+        pane.append(under, f, b);
+        // the stacks follow the leaf: the paper moves from one side to the other as it turns (they live in the row, behind the pages)
+        const ga = withBook ? geomOf(rowA, img) : null;
+        const gb = withBook ? geomOf(rowB, img) : null;
+        const hd = ga && gb ? held.get(rowA) : null;
+        draw = (at) => {
+          const turned = swing(f, b, forward, at);
+          pane.style.setProperty('--cast', castOf(turned).toFixed(3));
+          if (hd) placeDecor(hd.d, { pw: ga.pw, L: lerp(ga.L, gb.L, at), R: lerp(ga.R, gb.R, at), tail: lerp(ga.tail, gb.tail, at) });
+        };
+      } else {
+        // the book itself, drawn the way the viewer draws it: a pane two pages wide, the board and stacks on it, the pages, and the leaf
+        const bk = document.createElement('div');
+        bk.className = 'flip rbk closed';
+        bk.style.setProperty('--board', cloth());
+        bk.style.setProperty('--land', '0'); // the left half is the cover's back (hard.b), until the reader has the real one
+        bk.style.setProperty('--cast', '0');
+        const decor = makeDecor();
+        const side = Object.assign(document.createElement('div'), { className: `flip-pg rp` });
+        const gP = kind === 'open' ? g1 : g0; // the spread's, for the cover's back
+        const f = Object.assign(document.createElement('div'), { className: 'flip-face f rp hard is-cover' });
+        const b = Object.assign(document.createElement('div'), { className: 'flip-face b lp hard' });
+        b.style.setProperty('--L', `${gP.L}px`);
+        b.style.setProperty('--tail', `${gP.tail}px`);
+        side.append(pic(kind === 'open' ? underEl : restEl, 'r'));
+        f.append(pic(frontEl, 'r'));
+        b.append(pic(backEl, 'l'));
+        bk.append(...decor.all, side, f, b);
+        pane.append(bk);
+        draw = (at) => {
+          const k = { spine: lerp(g0.spine, g1.spine, at), top: lerp(g0.top, g1.top, at), pw: lerp(g0.pw, g1.pw, at), ph: lerp(g0.ph, g1.ph, at), L: lerp(g0.L, g1.L, at), R: lerp(g0.R, g1.R, at), tail: lerp(g0.tail, g1.tail, at) };
+          const pw = snap(k.pw);
+          const bx = box(k.spine - pw, k.top, 2 * pw, k.ph);
+          Object.assign(bk.style, { left: `${bx.left - area.left}px`, top: `${bx.top - area.top}px`, width: `${bx.width}px`, height: `${bx.height}px`, perspective: `${Math.round(pw * 4.5)}px` });
+          placeDecor(decor, { pw, L: k.L, R: k.R, tail: k.tail });
+          const turned = swing(f, b, forward, at);
+          pane.style.setProperty('--cast', castOf(turned).toFixed(3));
+          pane.style.setProperty('--cr', (forward ? at : 1 - at).toFixed(3)); // a lone cover has no crease; the book makes one as it opens
+        };
+      }
       draw(0);
+      // from here the overlay draws the book alone: the reader's own row for a lone cover or its spread would otherwise show where the book is no longer
+      if (kind !== 'pair') hide = rowA;
+      if (hide) hide.style.visibility = 'hidden';
       root.append(pane);
-      await sweep(turnMs(Math.abs(to - from) === 1 ? 620 : 560), draw);
-      land(); // under the leaf's final picture the reader moves to the new spread
+      try {
+        await sweep(turnMs(Math.abs(to - from) === 1 ? 620 : 560), draw);
+        if (withBook) paint(rowB, geomOf(rowB, img)); // the book of the row it lands on is there before it is shown
+        land(); // under the leaf's final picture the reader moves to the new spread
+      } finally {
+        if (hide) hide.style.visibility = '';
+      }
       const t0 = performance.now();
-      while (performance.now() - t0 < 600 && ![nL, nR].every((el) => ready(el))) await new Promise((r) => setTimeout(r, 40)); // until the reader has drawn them
+      while (performance.now() - t0 < 600 && ![...pb].every((el) => ready(el))) await new Promise((r) => setTimeout(r, 40)); // until the reader has drawn them
       pane.remove();
+      if (withBook) decorate(to); // the row it left, whose stacks were moved, is put right
       return true;
     } finally {
       busy = false;
     }
   }
-  return { turn, warm, get busy() { return busy; } };
+  return { turn, warm, decorate, later, get busy() { return busy; }, destroy() { mo.disconnect(); cancelAnimationFrame(timer); pagesEl.removeEventListener('load', later, true); } };
 }

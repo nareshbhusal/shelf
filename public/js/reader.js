@@ -1,6 +1,7 @@
 import { api, fileUrl, pageUrl } from './api.js';
 import { createAnnotations } from './annotations.js';
 import { bookName, onSettings, pageAnim, setSetting, settings } from './settings.js';
+import { MARGIN, clothOf } from './bookdecor.js';
 import { h, hashFor, icon, clamp, dirSegments, goBack } from './util.js';
 import { appName } from './store.js';
 import { openFileInfo } from './fileinfo.js';
@@ -74,6 +75,9 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   let rtl = wantRtl();
   let spread = wantSpread();
   let cover = wantCover();
+  // Flip mode with two pages side by side: the pages are drawn as a book (cloth board, stacks of paper), so they are a little smaller to leave room for it
+  const wantBound = (m = mode, sp = spread, r = rtl) => m === 'paged' && sp && !r && !isEpub && pageAnim() === 'flip';
+  let bound = wantBound();
 
   const titleEl = h('div', { class: 'reader-title' });
   const widthKey = book.format === 'pdf' ? 'pdfWidth' : isEpub ? 'epubWidth' : 'comicWidth';
@@ -354,6 +358,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
   function showMode() {
     root.classList.toggle('paged', mode === 'paged');
     root.classList.toggle('double', spread);
+    root.classList.toggle('bound', bound);
     root.classList.toggle('rtl', (mode === 'paged' || spread) && rtl);
     if (spreadBtn) {
       spreadBtn.classList.toggle('on', spread);
@@ -377,12 +382,14 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     setSetting(spreadKey, spread ? 'single' : 'double');
   }
   function applyMode(k) {
-    if (k !== modeKey && k !== 'rtlComic' && k !== spreadKey && k !== 'spreadCover' && k !== '*') return;
+    if (k !== modeKey && k !== 'rtlComic' && k !== spreadKey && k !== 'spreadCover' && k !== 'pagedAnimation' && k !== '*') return;
     const m = wantMode();
     const r = wantRtl();
     const sp = wantSpread();
     const cv = wantCover();
-    if (m === mode && r === rtl && sp === spread && cv === cover) return;
+    const bd = wantBound(m, sp, r);
+    if (m === mode && r === rtl && sp === spread && cv === cover && bd === bound) return;
+    bound = bd;
     mode = m;
     rtl = r;
     spread = sp;
@@ -581,7 +588,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
         for (const en of entries) {
           if (!en.isIntersecting) continue;
           // Two pages side by side count as one place: the first of the two.
-          const row = en.target.parentElement?.classList.contains('spread') ? en.target.parentElement.firstElementChild : en.target;
+          const row = en.target.parentElement?.classList.contains('spread') ? [...en.target.parentElement.children].find((c) => !c.classList.contains('rbook')) : en.target;
           const at = getIndex(row);
           if (typeof at === 'number') setCurrent(at);
           else setCurrent(at.page, at.id);
@@ -605,6 +612,7 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
     get rtl() { return rtl; },
     get spread() { return spread; },
     get cover() { return cover; },
+    get binding() { return bound; },
     get page() { return currentPage; },
     report: (n, partId) => (partId != null ? setCurrent(n, partId) : setCurrent(n)),
     toast: (m) => toast(m, 'quiet'),
@@ -737,25 +745,32 @@ function groupSpreads(count, { cover, wide }) {
  * which page you are on is simply how far across you have scrolled. (The CSS is under `.reader.paged`.)
  * In right-to-left mode the strip runs the other way and scrollLeft is negative.
  */
-function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf = (i) => i + 1, getRtl, report, onResize, peekUrl, isSpread }) {
+function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf = (i) => i + 1, getRtl, report, onResize, peekUrl, isSpread, bound, total, cloth }) {
   let vw = 0;
   let vh = 0;
+  let fw = 0; // the room for a page of a spread: the window, less the room the book's board and stacks take (see bookdecor.js)
+  let fh = 0;
   const measure = () => {
     vw = scroller.clientWidth;
     vh = scroller.clientHeight;
+    const bd = !!bound?.();
+    fw = bd ? vw - 2 * (MARGIN + Math.round(vw * 0.03)) : vw;
+    fh = bd ? vh - 2 * (MARGIN + 12) : vh;
     pagesEl.style.setProperty('--vw', `${vw}px`);
     pagesEl.style.setProperty('--vh', `${vh}px`);
+    pagesEl.style.setProperty('--fw', `${fw}px`);
+    pagesEl.style.setProperty('--fh', `${fh}px`);
   };
   measure();
   // Flip page turns (Settings > Reader): with two pages side by side, a leaf swings over (readerflip.js). Only the keys, buttons and clicks do this; a finger's own swipe still slides.
-  const flip = peekUrl ? createReaderFlip({ root: scroller.parentElement ?? document.body, pagesEl, scroller, peekUrl }) : null;
+  const flip = peekUrl ? createReaderFlip({ root: scroller.closest('.reader') ?? scroller.parentElement ?? document.body, pagesEl, scroller, peekUrl, total, bound, cloth }) : null;
   let flipping = false;
   let queued = null;
   let on = false;
   let scrollTimer = 0;
   let resizeTimer = 0;
   const index = () => clamp(Math.round(Math.abs(scroller.scrollLeft) / Math.max(1, vw)), 0, Math.max(0, getCount() - 1));
-  const reportNow = () => { report(pageOf(index())); if (flip && isSpread?.() && pageAnim() === 'flip') flip.warm(index(), getCount()); };
+  const reportNow = () => { report(pageOf(index())); if (flip && isSpread?.() && pageAnim() === 'flip') { flip.warm(index(), getCount()); flip.decorate(index()); } };
   // Pressing → twice quickly must move two pages, so while a turn is still animating, count from where it is heading.
   let heading = null;
   const current = () => (heading && (flipping || Date.now() - heading.t < 700) ? heading.i : index());
@@ -772,14 +787,19 @@ function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf
       const keep = index();
       measure();
       onResize?.(pageOf(keep));
+      flip?.later();
     }, 100);
   });
   ro.observe(scroller);
   return {
     get vw() { return vw; },
     get vh() { return vh; },
+    get fw() { return fw; },
+    get fh() { return fh; },
+    /** The book drawn behind the pages is drawn again (the layout has changed). */
+    redraw() { flip?.later(); },
     get on() { return on; },
-    set(v) { on = v; if (v) measure(); },
+    set(v) { on = v; if (v) { measure(); flip?.later(); } },
     index,
     current,
     reportNow,
@@ -789,6 +809,7 @@ function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf
       heading = { i, t: Date.now() };
       const to = (behavior) => scroller.scrollTo({ left: (getRtl() ? -1 : 1) * i * vw, top: 0, behavior });
       if (flipping) { queued = i; return; } // a leaf is still turning: carry on from where it lands
+      if (bound?.()) flip?.decorate(i);
       const from = index();
       if (smooth && flip && on && isSpread?.() && !getRtl() && pageAnim() === 'flip' && i !== from) {
         flipping = true;
@@ -811,6 +832,7 @@ function pagedStrip(scroller, pagesEl, { getCount, slotOf = (n) => n - 1, pageOf
       this.goSlot(slotOf(n), smooth);
     },
     destroy() {
+      flip?.destroy();
       clearTimeout(scrollTimer);
       clearTimeout(resizeTimer);
       scroller.removeEventListener('scroll', onScroll);
@@ -833,6 +855,7 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
   const tracker = makeTracker((el) => ({ id: Number(el.dataset.part), page: Number(el.dataset.page) }));
   const mounted = new Map(); // index in list -> { nodes, imgs }
   let paged = env?.mode === 'paged';
+  let bound = !!env?.binding;
   let spread = !!env?.spread;
   let cover = env?.cover !== false;
   // Two-page view groups a part's pages into rows of two (see groupSpreads); `groups` is kept per mounted part.
@@ -844,6 +867,9 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
     getRtl: () => !!env?.rtl,
     report: (n) => env?.report(n, list[cur].id),
     isSpread: () => spread && paged,
+    bound: () => !!env?.binding,
+    total: () => book.pages || 0,
+    cloth: () => clothOf(book),
     peekUrl: (el, w) => { const part = list.find((p) => String(p.id) === el.dataset.part) ?? book; return `/api/books/${part.id}/peek/${el.dataset.page}?w=${w}&v=${part.fingerprint}`; },
   });
   strip.set(paged);
@@ -1051,7 +1077,9 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
       const wantPaged = env?.mode === 'paged';
       const wantSpread = !!env?.spread;
       const wantCover = env?.cover !== false;
-      if (wantPaged === paged && wantSpread === spread && wantCover === cover) return;
+      const wantBound = !!env?.binding;
+      if (wantPaged === paged && wantSpread === spread && wantCover === cover && wantBound === bound) return;
+      bound = wantBound;
       const wasPaged = paged;
       paged = wantPaged;
       spread = wantSpread;
@@ -1071,6 +1099,7 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
         edges.unobserve(bottom); edges.observe(bottom);
       }
       for (const i of mounted.keys()) rearrange(i);
+      strip.redraw();
     },
     destroy() {
       clearTimeout(regroupTimer);
@@ -1106,6 +1135,7 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
 
   let width = 900;
   let paged = env?.mode === 'paged';
+  let bound = !!env?.binding;
   let spread = !!env?.spread;
   let cover = env?.cover !== false;
   let groups = null; // two-page view: [[1], [2, 3], ...], what is shown together
@@ -1120,7 +1150,7 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
   // fits the window (two side by side: as fits half of it). A page that is already a spread keeps the whole room.
   const isWide = (n) => (ratios[n - 1] ?? 9) < 0.95;
   const share = (p) => (spread && !p.wide ? 2 : 1);
-  const widthOf = (p) => (paged ? Math.max(80, Math.floor(Math.min(strip.vw / share(p), strip.vh / (ratios[p.n - 1] ?? aspect)))) : Math.max(80, Math.floor(width / share(p))));
+  const widthOf = (p) => (paged ? Math.max(80, Math.floor(Math.min((p.wide ? strip.vw : strip.fw) / share(p), (p.wide ? strip.vh : strip.fh) / (ratios[p.n - 1] ?? aspect)))) : Math.max(80, Math.floor(width / share(p))));
   const sizeEl = (p) => {
     const w = widthOf(p);
     p.el.style.width = `${w}px`;
@@ -1161,6 +1191,9 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
     getRtl: () => !!env?.rtl,
     report: (n) => env?.report(n),
     isSpread: () => spread && paged,
+    bound: () => !!env?.binding,
+    total: () => book.pages || 0,
+    cloth: () => clothOf(book),
     peekUrl: (el, w) => `/api/books/${book.id}/peek/${el.dataset.page}?w=${w}&v=${book.fingerprint}`,
     onResize: (n) => {
       pages.forEach(sizeEl);
@@ -1178,6 +1211,7 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
     pages.forEach(sizeEl);
     watchVisibility(); // a different distance counts as "near" in each layout
     pages.filter((p) => p.visible).forEach(render);
+    strip?.redraw();
   }
 
   // ---- search: what the pages say, and the marks drawn over the text layers
@@ -1376,7 +1410,9 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
       const wantPaged = env?.mode === 'paged';
       const wantSpread = !!env?.spread;
       const wantCover = env?.cover !== false;
-      if (wantPaged === paged && wantSpread === spread && wantCover === cover) return;
+      const wantBound = !!env?.binding;
+      if (wantPaged === paged && wantSpread === spread && wantCover === cover && wantBound === bound) return;
+      bound = wantBound;
       paged = wantPaged;
       spread = wantSpread;
       cover = wantCover;

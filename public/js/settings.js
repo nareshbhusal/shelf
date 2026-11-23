@@ -111,6 +111,7 @@ const SCHEMA = [
       { key: 'spreadPdf', label: 'PDF pages', type: 'select', options: [['single', 'One at a time'], ['double', 'Two side by side']], default: 'single' },
       { key: 'spreadComic', label: 'Comic pages', type: 'select', options: [['single', 'One at a time'], ['double', 'Two side by side']], default: 'single' },
       { key: 'spreadCover', label: 'Two side by side: first page on its own (cover)', type: 'checkbox', default: true },
+      { key: 'readerProgress', label: 'Reading progress bar along the bottom', type: 'checkbox', default: true },
       { key: 'showFolios', label: 'Scrolling: page numbers between pages', type: 'checkbox', default: true },
       { key: 'pagedAnimation', label: 'Animate page turns (one page at a time)', type: 'select', options: [['slide', 'Slide'], ['flip', 'Flip, like a book (two pages side by side; others slide)'], ['off', 'Off']], default: 'slide' },
       { key: 'pdfWidth', label: 'PDF page width', type: 'range', min: 400, max: 2000, step: 50, unit: 'px', default: 900 },
@@ -222,6 +223,7 @@ export function applySettings() {
   for (const k of ['spineColour', 'cardShade', 'coverShadow', 'badgeBlur', 'ribbonShadow', 'cardMotion', 'flipPeek', 'flipButton']) root.dataset[k] = s[k] ? '1' : '0';
   root.dataset.progressStyle = s.progressStyle;
   root.dataset.showFolios = s.showFolios ? '1' : '0';
+  root.dataset.readerProgress = s.readerProgress ? '1' : '0';
   const set = (k, v) => root.style.setProperty(k, v);
   set('--card-w', `${s.cardWidth}px`);
   set('--gap', `${s.cardGap}px`);
