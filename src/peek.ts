@@ -6,6 +6,7 @@ import { LIBRARY_DIR } from './config.js';
 import type { BookRow } from './db.js';
 import { semaphore } from './util.js';
 import { mendedEpub } from './epubmend.js';
+import { fallbackFontFile, loadFallbackFonts } from './fallbackfont.js';
 import { comicPages, readEntry } from './zip.js';
 
 /**
@@ -21,7 +22,7 @@ const MUPDF_MAX_BYTES = 120 * 1024 * 1024; // the same limit as covers: bigger f
 const EPUB_PAGE = { w: 420, h: 620, em: 12 };
 
 // A PDF or EPUB that is being flipped through stays open for a short while, so each turn doesn't read the whole file again.
-interface Opened { doc: mupdf.Document; pages: number; timer: NodeJS.Timeout }
+interface Opened { doc: mupdf.Document; pages: number; timer: NodeJS.Timeout; needsFont: boolean; epub: boolean }
 const opened = new Map<string, Opened>();
 const IDLE_MS = 30_000;
 const MAX_OPEN = 3;
@@ -33,6 +34,25 @@ function close(key: string) {
   opened.delete(key);
   try { o.doc.destroy(); } catch { /* already gone */ }
 }
+
+// mupdf asks for a font in two cases while it lays out or draws an EPUB: by family, when the book's own isn't there (answered only for a book that has
+// letters its built-in font lacks, so that the whole text is set in the stand-in), and by script, for a single letter its font has no glyph for (answered
+// always, for the scripts the stand-in covers: that is what a browser does on its own, and it is why the reader never showed boxes). Only while an EPUB is being
+// worked on (the lookups happen inside the calls below, which have no await in them, so nothing else can slip in).
+let epubWork = false;
+let standIn = false;
+const standInFonts = new Map<string, mupdf.Font>();
+const STAND_IN_SCRIPTS = new Set(['Latin', 'Greek', 'Cyrillic', 'Common', 'Inherited']);
+mupdf.installLoadFontFunction((name, script, bold, italic) => {
+  if (!epubWork) return null;
+  const byScript = !!script && script !== 'undefined';
+  if (byScript ? !STAND_IN_SCRIPTS.has(script) : !standIn) return null;
+  const f = fallbackFontFile(byScript ? 'serif' : name, !!bold, !!italic);
+  if (!f) return null;
+  let font = standInFonts.get(f.key);
+  if (!font) standInFonts.set(f.key, (font = new mupdf.Font(f.key, f.data)));
+  return font;
+});
 
 async function openPdf(book: BookRow, abs: string): Promise<Opened | null> {
   const key = book.fingerprint;
@@ -46,11 +66,24 @@ async function openPdf(book: BookRow, abs: string): Promise<Opened | null> {
   }
   if ((await fs.stat(abs)).size > MUPDF_MAX_BYTES) return null;
   const epub = book.format === 'epub';
-  // an EPUB goes through a mended copy when its pictures are of a kind mupdf can't show (see epubmend.ts)
-  const bytes = (epub ? await mendedEpub(abs).catch(() => null) : null) ?? (await fs.readFile(abs));
-  const doc = mupdf.Document.openDocument(bytes, epub ? 'application/epub+zip' : 'application/pdf');
-  if (epub) doc.layout(EPUB_PAGE.w, EPUB_PAGE.h, EPUB_PAGE.em);
-  const o: Opened = { doc, pages: doc.countPages(), timer: setTimeout(() => close(key), IDLE_MS) };
+  // An EPUB goes through a mended copy when mupdf would otherwise show it badly: pictures it can't draw, scrambled fonts (see epubmend.ts). A book with letters
+  // its built-in font lacks gets a font from this computer to stand in for it, for the layout only.
+  const mended = epub ? await mendedEpub(abs).catch(() => null) : null;
+  const bytes = mended?.bytes ?? (await fs.readFile(abs));
+  if (epub) await loadFallbackFonts(); // the four font files, read once
+  epubWork = epub;
+  standIn = !!mended?.needsFont; // from opening to laying out, the letters are measured with the same font they are drawn with, or they would overlap
+  let doc: mupdf.Document;
+  let pages: number;
+  try {
+    doc = mupdf.Document.openDocument(bytes, epub ? 'application/epub+zip' : 'application/pdf');
+    if (epub) doc.layout(EPUB_PAGE.w, EPUB_PAGE.h, EPUB_PAGE.em);
+    pages = doc.countPages(); // (this is what does the laying out, so it belongs in here)
+  } finally {
+    epubWork = false;
+    standIn = false;
+  }
+  const o: Opened = { doc, pages, needsFont: !!mended?.needsFont, epub, timer: setTimeout(() => close(key), IDLE_MS) };
   opened.set(key, o);
   while (opened.size > MAX_OPEN) close(opened.keys().next().value as string);
   return o;
@@ -76,10 +109,19 @@ export function peekPage(book: BookRow, n: number, width: number): Promise<Buffe
       const o = await openPdf(book, abs);
       if (!o) throw new PeekError(413, 'this file is too large to preview here');
       if (n < 1 || n > o.pages) throw new PeekError(404, 'page out of range');
-      const page = o.doc.loadPage(n - 1);
-      const [x0, , x1] = page.getBounds();
-      const scale = w / Math.max(1, x1 - x0);
-      const pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, false); // no annotations in the picture: the viewer draws them itself, so a change shows at once
+      epubWork = o.epub;
+      standIn = o.needsFont;
+      let page: mupdf.Page;
+      let pix: mupdf.Pixmap;
+      try {
+        page = o.doc.loadPage(n - 1);
+        const [x0, , x1] = page.getBounds();
+        const scale = w / Math.max(1, x1 - x0);
+        pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, false); // no annotations in the picture: the viewer draws them itself, so a change shows at once
+      } finally {
+        epubWork = false;
+        standIn = false;
+      }
       img = Buffer.from(pix.asJPEG(78, false));
       try { pix.destroy(); } catch { /* not needed */ }
       try { page.destroy(); } catch { /* not needed */ }

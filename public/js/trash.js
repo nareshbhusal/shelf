@@ -19,7 +19,7 @@ export async function renameFolder(dir, name) {
   }
 }
 
-const sentence = (what) => `${what} will be moved into the “.shelf-trash” folder inside your library, not erased. Move it back out to undo; its tags and reading progress come back with it.`;
+const sentence = (what) => `${what} will be moved into the “.shelf-trash” folder inside your library, not erased. Settings → Trash puts it back; its tags, lists, reading progress and bookmarks come back with it.`;
 
 async function send(body) {
   try {

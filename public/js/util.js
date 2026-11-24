@@ -46,6 +46,7 @@ const ICONS = {
   'arrow-up-right': '<path d="M7 17 17 7M9 7h8v8"/>',
   check: '<path d="m5 12 5 5 9-10"/>',
   bookmark: '<path d="M6 3h12v18l-6-4.5L6 21z"/>',
+  flag: '<path d="M5 21V4M5 5h12l-2.5 4L17 13H5"/>',
   more: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
   chevron: '<path d="m9 6 6 6-6 6"/>',
   spread: '<path d="M12 6c-2-1.6-5-2-8-1.5v13c3-.5 6 0 8 1.5 2-1.5 5-2 8-1.5v-13C17 4 14 4.4 12 6z"/><path d="M12 6v13"/>',

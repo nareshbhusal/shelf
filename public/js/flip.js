@@ -4,6 +4,7 @@ import { setSetting, settings } from './settings.js';
 import { castOf, swing, sweep, turnMs } from './leaf.js';
 import { MARGIN, bulkOf, clothOf, edgesOf, makeDecor, placeDecor } from './bookdecor.js';
 import { createFlipNotes } from './flipnotes.js';
+import { createBookmarks } from './bookmarks.js';
 
 // Flipping through a book from its card, without opening the reader. The book lifts out of the shelf into a larger one in front of it (the
 // card stays where it is): a closed book whose cover swings open to a two-page spread, with the pages read on the left and the pages still
@@ -110,13 +111,30 @@ function openBook(wrap, book, { open, saved }) {
   const jump = h('input', { class: 'flip-n', type: 'text', inputmode: 'numeric', autocomplete: 'off', spellcheck: false, 'aria-label': 'Page: type a number and press Enter to go there', title: 'Type a page number and press Enter' });
   // Nothing here is saved unless you ask: this stores the page on show as your place in the book (the same progress the reader keeps).
   let placed = false;
-  const placeBtn = h('button', { class: 'flip-btn icon', 'aria-label': 'Set this page as my reading progress', onClick: () => setPlace() }, icon('bookmark', 14));
+  const placeBtn = h('button', { class: 'flip-btn icon', 'aria-label': 'Set this page as my reading progress', onClick: () => setPlace() }, icon('flag', 14));
+  // Bookmarks (any number, kept by Shelf): the right-hand page on show, like the place button. An EPUB's are told by how far through the book they are.
+  const pageNow = () => (pos === 0 ? 1 : rightPage());
+  const isEpub = book.format === 'epub';
+  const epubPage = (m) => Math.max(1, Math.min(total, Math.round((m.frac ?? 0) * total) + 1));
+  const marks = createBookmarks({
+    host: () => layer,
+    bookId: () => book.id,
+    className: 'flip-btn icon',
+    size: 14,
+    below: false,
+    dark: true,
+    place: () => (isEpub ? { frac: (pageNow() - 1) / total } : { page: pageNow(), pos: 0 }),
+    same: (m, p) => (isEpub ? m.frac != null && Math.abs(m.frac - p.frac) < 0.5 / total : m.page === p.page),
+    describe: (m) => `Page ${isEpub ? epubPage(m) : m.page}`,
+    jump: (m) => goPage(isEpub ? epubPage(m) : m.page),
+  });
   const bar = h(
     'div',
     { class: 'flip-bar' },
     h('span', { class: 'flip-sp' }),
     jump,
     h('span', { class: 'flip-tot' }, `/ ${total}`),
+    marks.button,
     placeBtn,
     h('button', { class: 'flip-btn icon', title: 'Open in the reader at this page (Enter)', 'aria-label': 'Open in the reader', onClick: () => toReader() }, icon('arrow-up-right', 14)),
     h('button', { class: 'flip-btn icon', title: 'Close (Esc)', 'aria-label': 'Close', onClick: () => close(true) }, icon('x', 14)),
@@ -213,13 +231,14 @@ function openBook(wrap, book, { open, saved }) {
     placed = true;
     placeBtn.replaceChildren(icon('check', 14));
     placeBtn.title = `Your place is now page ${page}`;
-    setTimeout(() => { placeBtn.replaceChildren(icon('bookmark', 14)); ui(); }, 1600);
+    setTimeout(() => { placeBtn.replaceChildren(icon('flag', 14)); ui(); }, 1600);
   }
   function ui() {
     placeBtn.title = pos === 0 ? 'Set page 1 as my reading progress' : `Set page ${rightPage()} as my reading progress`;
     const l = leftOf(pos);
     const r = rightOf(pos);
     const text = pos === 0 || typeof l !== 'number' ? '1' : typeof r !== 'number' ? String(l) : `${l}\u2013${r}`;
+    marks.refresh();
     jump.value = text;
     jump.style.width = `${text.length + 1.2}ch`;
   }
@@ -307,6 +326,7 @@ function openBook(wrap, book, { open, saved }) {
 
   let wheelAt = 0;
   const onWheel = (e) => {
+    if (e.target.closest?.('.bm-panel')) return; // the bookmarks list scrolls itself
     e.preventDefault();
     const now = Date.now();
     if (now - wheelAt < 240 || Math.abs(e.deltaY) + Math.abs(e.deltaX) < 4) return;
@@ -319,7 +339,7 @@ function openBook(wrap, book, { open, saved }) {
   // left page turns back and on the right forward; a tap on the dimmed shelf around the book puts it back. The scrubber keeps its own dragging.
   let touch = null;
   let swiped = false;
-  layer.addEventListener('pointerdown', (e) => { touch = { x: e.clientX, y: e.clientY, inside: stage.contains(e.target) || !!e.target.closest?.('.fa-pop'), keep: bar.contains(e.target) || !!e.target.closest?.('.fa-pop'), text: e.pointerType === 'mouse' && !!e.target.closest?.('.fa-text') }; swiped = false; });
+  layer.addEventListener('pointerdown', (e) => { touch = { x: e.clientX, y: e.clientY, inside: stage.contains(e.target) || !!e.target.closest?.('.fa-pop, .bm-panel'), keep: bar.contains(e.target) || !!e.target.closest?.('.fa-pop, .bm-panel'), text: e.pointerType === 'mouse' && !!e.target.closest?.('.fa-text') }; swiped = false; });
   layer.addEventListener('pointercancel', () => { touch = null; });
   layer.addEventListener('pointerup', (e) => {
     const t = touch;
@@ -377,7 +397,7 @@ function openBook(wrap, book, { open, saved }) {
   const onKey = (e) => {
     if (!pane.isConnected) return close(false);
     if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.target === jump || e.target instanceof HTMLTextAreaElement) return; // the page box and a note being written handle their own keys
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return; // the page box, a bookmark's name and a note being written handle their own keys
     const k = e.key;
     let handled = true;
     if (k === 'ArrowRight' || k === 'ArrowDown' || k === 'PageDown' || k === ' ') goSpread(target + 1);
@@ -385,7 +405,8 @@ function openBook(wrap, book, { open, saved }) {
     else if (k === 'Home') goSpread(1);
     else if (k === 'End') goSpread(lastSpread);
     else if (k === 'Enter' && !(e.target instanceof HTMLButtonElement)) toReader();
-    else if (k === 'Escape') { if (!notes?.consumeEscape()) close(true); }
+    else if (k === 'Escape') { if (!marks.consumeEscape() && !notes?.consumeEscape()) close(true); }
+    else if (k === 'b' || k === 'B') marks.toggleHere();
     else if (k === 'h' || k === 'H') handled = !!notes?.highlightSelection();
     else if (k === '+' || k === '=') setScale(scale * 1.08, true);
     else if (k === '-' || k === '_') setScale(scale / 1.08, true);
@@ -412,6 +433,7 @@ function openBook(wrap, book, { open, saved }) {
       await lift(true);
     }
     notes?.destroy();
+    marks.destroy();
     layer.remove();
     if (placed) saved?.(); // the card's ribbon and bar now show the new place
   }

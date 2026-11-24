@@ -4,6 +4,7 @@ import { confirmDialog, modal, toast } from './ui.js';
 import { fmtBytes, h, icon } from './util.js';
 import { openReadersManager } from './readers.js';
 import { identityHelp, openMissing } from './missing.js';
+import { openTrash } from './trashview.js';
 
 export const SORTS = [
   ['title', 'Name'],
@@ -364,6 +365,11 @@ export function openSettings() {
   missingLabel();
   refreshInfo().then(missingLabel).catch(() => {}); // the count may have changed since the page loaded
   purgeBtn.onclick = () => openMissing({ onChange: missingLabel });
+  // The trash: what was moved there, and putting it back.
+  const trashBtn = h('button', { class: 'btn', title: 'See what you moved to the trash, and put it back' }, 'Open the trash…');
+  const trashLabel = (n) => (trashBtn.textContent = n ? `Open the trash (${n})…` : 'Open the trash…');
+  api.get('/trash').then((t) => trashLabel(t.items.length)).catch(() => {});
+  trashBtn.onclick = () => openTrash({ onChange: trashLabel });
   const resetBtn = h('button', { class: 'btn' }, 'Reset display settings');
   resetBtn.onclick = () => {
     try { localStorage.removeItem(KEY); } catch { /* ignore */ }
@@ -460,6 +466,14 @@ export function openSettings() {
     return box;
   })();
 
+  const trash = h(
+    'section',
+    { class: 'set-group' },
+    h('h3', null, 'Trash'),
+    h('div', { class: 'muted small' }, 'Deleting in Shelf only moves books and folders into a “.shelf-trash” folder inside your library. They can be put back here, where they were; Shelf never empties it for you.'),
+    h('div', { class: 'btn-row' }, trashBtn),
+  );
+
   const backup = h(
     'section',
     { class: 'set-group' },
@@ -488,5 +502,5 @@ export function openSettings() {
       : null,
   );
 
-  const m = modal({ title: 'Display & settings', body: [...sections, programs, apps, backup, maintenance], wide: true });
+  const m = modal({ title: 'Display & settings', body: [...sections, programs, apps, trash, backup, maintenance], wide: true });
 }

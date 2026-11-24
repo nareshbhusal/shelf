@@ -409,6 +409,7 @@ export async function mergeMissing(fromId: number, intoId: number): Promise<void
   db.transaction(() => {
     db.prepare('INSERT OR IGNORE INTO book_tags (book_id, tag_id) SELECT ?, tag_id FROM book_tags WHERE book_id = ?').run(into.id, from.id);
     db.prepare('UPDATE list_items SET book_id = ? WHERE book_id = ? AND list_id NOT IN (SELECT list_id FROM list_items WHERE book_id = ?)').run(into.id, from.id, into.id);
+    db.prepare('UPDATE bookmarks SET book_id = ? WHERE book_id = ?').run(into.id, from.id);
     if (into.progress_at === null && from.progress_at !== null) {
       db.prepare('UPDATE books SET progress_page = ?, progress_at = ?, progress_pos = ?, progress_frac = ? WHERE id = ?').run(
         from.progress_page, from.progress_at, from.progress_pos, from.progress_frac, into.id,

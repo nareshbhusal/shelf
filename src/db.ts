@@ -162,6 +162,30 @@ CREATE TABLE IF NOT EXISTS readers (
   scope    TEXT NOT NULL DEFAULT 'books'
 );
 
+-- Bookmarks: any number per book, kept here and never in the file. page is the page of a PDF or comic (an EPUB: its section),
+-- pos how far down it (0..1), frac how far through the whole book (EPUB, so the flip-through viewer can find it too).
+CREATE TABLE IF NOT EXISTS bookmarks (
+  id         INTEGER PRIMARY KEY,
+  book_id    INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  page       INTEGER NOT NULL,
+  pos        REAL,
+  frac       REAL,
+  label      TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bookmarks_book ON bookmarks(book_id);
+
+-- What was moved to the trash, as one entry per item that was deleted (a book, or a whole folder): the folder it went into
+-- and its original library path, so it can be put back. (The files themselves are in the library's .shelf-trash folder.)
+CREATE TABLE IF NOT EXISTS trash_items (
+  id         INTEGER PRIMARY KEY,
+  batch      TEXT NOT NULL,
+  rel        TEXT NOT NULL,
+  is_dir     INTEGER NOT NULL DEFAULT 0,
+  trashed_at INTEGER NOT NULL,
+  UNIQUE (batch, rel)
+);
+
 -- Small key/value store: display settings (key 'settings', JSON) live here instead of only in the browser.
 CREATE TABLE IF NOT EXISTS kv (
   key   TEXT PRIMARY KEY,

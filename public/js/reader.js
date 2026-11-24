@@ -10,6 +10,7 @@ import { epubImpl } from './epubreader.js';
 import { toast } from './ui.js';
 import { clearMarks, createSearch, markMatches } from './search.js';
 import { createReaderFlip } from './readerflip.js';
+import { createBookmarks } from './bookmarks.js';
 
 const PDFJS = '/vendor/pdfjs';
 let pdfjsPromise = null;
@@ -92,6 +93,15 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     pageTotal.title = 'Estimated pages, about 1800 characters each';
     if (document.activeElement !== pageInput) pageInput.value = String(estPage());
   }
+  // Bookmarks: any number, kept by Shelf. An EPUB's are told by section, spot and how far through the book (see bookFraction).
+  const bookmarks = createBookmarks({
+    host: root,
+    bookId: () => book.id,
+    place: () => (isEpub ? (weights && currentPage > 0 ? { page: currentPage, pos: Math.round(currentPos * 1000) / 1000, frac: Math.round(bookFraction() * 10000) / 10000 } : null) : total && currentPage > 0 ? { page: currentPage, pos: Math.round(readingPos() * 1000) / 1000 } : null),
+    same: (m, p) => (isEpub ? m.frac != null && Math.abs(m.frac - p.frac) <= 0.5 / Math.max(1, estPages) : m.page === p.page),
+    describe: (m) => (isEpub ? `${estPages ? `p. ~${clamp(Math.ceil((m.frac ?? 0) * estPages), 1, estPages)} · ` : ''}${Math.floor((m.frac ?? 0) * 100)}%` : `Page ${m.page}`),
+    jump: (m) => (isEpub ? impl?.goToPos?.(m.page, m.pos ?? 0) : impl?.goTo(m.page, true)),
+  });
   const bar = h(
     'div',
     { class: 'reader-bar' },
@@ -109,6 +119,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     h('span', { class: 'bar-sep' }),
     h('button', { class: 'icon-btn', title: 'Open this book in one of your programs, at this page', onClick: (e) => { const n = isEpub ? (estPages ? estPage() : 0) : parseInt(pageInput.value, 10); openWithMenu(e.currentTarget, { bookIds: [book.id], ...(n > 0 ? { page: n } : {}) }, 1); } }, icon('external', 18)),
     search ? search.button : null,
+    bookmarks.button,
     h('button', { class: 'icon-btn', title: 'File info (I)', onClick: () => openFileInfo(book, ann, { coverFromPage }) }, icon('info', 18)),
     h('span', { class: 'bar-sep' }),
     h('button', { class: 'icon-btn mode-btn', title: 'Reading mode (M)', onClick: () => toggleMode() }, icon('paged', 18)),
@@ -225,6 +236,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     partIdx = i;
     partSince = Date.now();
     book = parts[i];
+    bookmarks.reload();
     if (root.classList.contains('bar-off')) toast(`Part ${i + 1} of ${parts.length}: ${bookName(book)}`, 'quiet'); // the toolbar says it otherwise
     total = book.pages ?? 0;
     currentPage = 0; // let the first page of this part through
@@ -257,6 +269,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     currentPage = page;
     currentPos = pos;
     if (whereEl) whereEl.textContent = `${bookPercent()}%`;
+    bookmarks.refresh();
     epubBox();
     updateCount();
     if (sectionChanged || bookPercent() !== lastPct) setTitles();
@@ -296,6 +309,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     currentPage = n;
     if (!settling) currentPos = readingPos();
     pageInput.value = String(n);
+    bookmarks.refresh();
     setTitles();
     paintProgress();
     paintEdges();
@@ -535,7 +549,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     if (e.target?.tagName === 'INPUT' || e.ctrlKey || e.metaKey || e.altKey) return;
     if (document.getElementById('modal-root').childElementCount) return;
     switch (e.key) {
-      case 'Escape': if (!search?.consumeEscape() && !ann?.consumeEscape() && !impl?.consumeEscape?.()) goBack(backHref); break;
+      case 'Escape': if (!bookmarks.consumeEscape() && !search?.consumeEscape() && !ann?.consumeEscape() && !impl?.consumeEscape?.()) goBack(backHref); break;
       case '/': if (search) { search.open(); e.preventDefault(); } break;
       case 'ArrowLeft': if (mode === 'paged') turn(rtl ? 1 : -1); else sideStep(-1); e.preventDefault(); break;
       case 'ArrowRight': if (mode === 'paged') turn(rtl ? -1 : 1); else sideStep(1); e.preventDefault(); break;
@@ -548,6 +562,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
       case '[': impl?.fontStep?.(-1); break;
       case ']': impl?.fontStep?.(1); break;
       case 't': case 'T': impl?.toggleToc?.(); break;
+      case 'b': case 'B': bookmarks.toggleHere(); break;
       case 'n': case 'N': ann?.toggleDrawer(); break;
       case 'i': case 'I': openFileInfo(book, ann, { coverFromPage }); break;
       case '+': case '=': zoom(1); break;
@@ -699,6 +714,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
       impl?.destroy();
       search?.destroy();
       ann?.destroy();
+      bookmarks.destroy();
       unsubName();
       unsubWidth();
       unsubMode();

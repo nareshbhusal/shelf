@@ -8,7 +8,7 @@ import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb, spineColour } from
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
-import { moveToTrash } from './trash.js';
+import { listTrash, moveToTrash, restoreFromTrash } from './trash.js';
 import { ds, listSessions, one, pathsFor, SessionError, type SessionOut } from './sessions.js';
 import { EPUB_MIME, epubStructure, pagesFromChars } from './epub.js';
 import { pdfDetails, toolsAvailable } from './meta.js';
@@ -719,6 +719,19 @@ app.post('/api/trash', async (req, res) => {
   res.json(await moveToTrash(rels));
 });
 
+// What is in the trash (the library's .shelf-trash folder), and putting items back where they were. Nothing here ever deletes.
+app.get('/api/trash', async (_req, res) => res.json({ items: await listTrash() }));
+app.post('/api/trash/restore', async (req, res) => {
+  if (READONLY) throw new HttpError(403, 'Shelf is in read-only mode, so it will not move anything.');
+  if (scanState.running) throw new HttpError(409, 'Shelf is scanning the library right now. Try again in a moment.');
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  if (!items.length) throw new HttpError(400, 'items expected');
+  if (items.length > 5000) throw new HttpError(400, 'too many items');
+  const r = await restoreFromTrash(items.map((i: { batch?: unknown; rel?: unknown }) => ({ batch: String(i?.batch ?? ''), rel: String(i?.rel ?? '') })));
+  if (r.restored) startScan(); // so the books are back on the shelf (with their tags, lists, progress and bookmarks) without another step
+  res.json(r);
+});
+
 // ---------- sessions (docsessions); everything goes through its command line, see sessions.ts ----------
 
 // docsessions is an external app: it needs its command configured, and can be switched off in Settings.
@@ -1007,6 +1020,71 @@ app.put('/api/books/:id/progress', async (req, res) => {
 app.delete('/api/books/:id/progress', (req, res) => {
   const book = getBook(req.params.id);
   db.prepare('UPDATE books SET progress_page = 0, progress_pos = NULL, progress_frac = NULL, progress_at = NULL WHERE id = ?').run(book.id);
+  res.json({ ok: true });
+});
+
+// ---------- bookmarks ----------
+// Any number per book, kept in the database (never in the file). A PDF or comic: the page, and how far down it. An EPUB: the section, how far into it and how far
+// through the whole book, so the reader and the flip-through viewer (which pages the book differently) can both find the place.
+
+interface BookmarkRow { id: number; book_id: number; page: number; pos: number | null; frac: number | null; label: string | null; created_at: number }
+const bookmarkOut = (r: BookmarkRow) => ({ id: r.id, page: r.page, pos: r.pos, frac: r.frac, label: r.label, createdAt: r.created_at });
+const unitOrNull = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : null);
+const cleanLabel = (v: unknown) => {
+  const t = typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+  return t || null;
+};
+
+app.get('/api/books/:id/bookmarks', (req, res) => {
+  const book = getBook(req.params.id);
+  const rows = db.prepare('SELECT * FROM bookmarks WHERE book_id = ? ORDER BY COALESCE(frac, 0), page, COALESCE(pos, 0), id').all(book.id) as BookmarkRow[];
+  res.json(rows.map(bookmarkOut));
+});
+
+app.post('/api/books/:id/bookmarks', async (req, res) => {
+  const book = getBook(req.params.id);
+  let page = req.body?.page === undefined ? 0 : toInt(req.body.page);
+  let pos = unitOrNull(req.body?.pos);
+  let frac = unitOrNull(req.body?.frac);
+  if (book.format === 'epub') {
+    const st = await epubStructure(`${book.id}:${book.fingerprint}`, absPath(book)).catch(() => null);
+    const chars = st?.chars ?? [];
+    const all = chars.reduce((x, y) => x + y, 0);
+    if (all > 0) {
+      if (!page && frac !== null) { // told only how far through the book: which section, and where in it
+        const target = frac * all;
+        let acc = 0;
+        for (let k = 0; k < chars.length; k++) {
+          if (target < acc + chars[k] || k === chars.length - 1) { page = k + 1; pos = chars[k] ? Math.min(1, Math.max(0, (target - acc) / chars[k])) : 0; break; }
+          acc += chars[k];
+        }
+      } else if (page && frac === null) { // told the section and the spot: how far through the book that is
+        const i = Math.min(page, chars.length) - 1;
+        frac = Math.min(1, (chars.slice(0, i).reduce((x, y) => x + y, 0) + (pos ?? 0) * chars[i]) / all);
+      }
+    }
+  }
+  if (page < 1) page = 1;
+  if (book.format !== 'epub' && book.pages && page > book.pages) page = book.pages;
+  // The same place twice is one bookmark: the same page, or for an EPUB, the same spot (about a fifth of a page apart).
+  const near = book.format === 'epub' && frac !== null
+    ? (db.prepare('SELECT * FROM bookmarks WHERE book_id = ? AND frac IS NOT NULL AND ABS(frac - ?) < 0.0005').get(book.id, frac) as BookmarkRow | undefined)
+    : (db.prepare('SELECT * FROM bookmarks WHERE book_id = ? AND page = ?').get(book.id, page) as BookmarkRow | undefined);
+  if (near) return void res.json({ ...bookmarkOut(near), existing: true });
+  const label = cleanLabel(req.body?.label);
+  const id = Number(db.prepare('INSERT INTO bookmarks (book_id, page, pos, frac, label, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(book.id, page, pos, frac, label, Date.now()).lastInsertRowid);
+  res.status(201).json(bookmarkOut(db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id) as BookmarkRow));
+});
+
+app.patch('/api/bookmarks/:id', (req, res) => {
+  const id = toInt(req.params.id);
+  if (!db.prepare('SELECT 1 FROM bookmarks WHERE id = ?').get(id)) throw new HttpError(404, 'bookmark not found');
+  db.prepare('UPDATE bookmarks SET label = ? WHERE id = ?').run(cleanLabel(req.body?.label), id);
+  res.json(bookmarkOut(db.prepare('SELECT * FROM bookmarks WHERE id = ?').get(id) as BookmarkRow));
+});
+
+app.delete('/api/bookmarks/:id', (req, res) => {
+  db.prepare('DELETE FROM bookmarks WHERE id = ?').run(toInt(req.params.id));
   res.json({ ok: true });
 });
 
@@ -1494,6 +1572,10 @@ app.get('/api/export', (_req, res) => {
     (listBooks.get(it.list_id) ?? listBooks.set(it.list_id, []).get(it.list_id)!).push({ path: b.path, title: b.title, fingerprint: b.fingerprint, ...(b.missing ? { missing: true } : {}) });
     (inLists.get(b.id) ?? inLists.set(b.id, []).get(b.id)!).push(listName.get(it.list_id) ?? '?');
   }
+  const marksOf = new Map<number, unknown[]>();
+  for (const m of db.prepare('SELECT * FROM bookmarks ORDER BY book_id, COALESCE(frac, 0), page, id').all() as BookmarkRow[]) {
+    (marksOf.get(m.book_id) ?? marksOf.set(m.book_id, []).get(m.book_id)!).push({ page: m.page, ...(m.pos != null ? { pos: m.pos } : {}), ...(m.frac != null ? { frac: m.frac } : {}), ...(m.label ? { label: m.label } : {}), at: iso(m.created_at) });
+  }
   res.json({
     format: 'shelf-export',
     version: 1,
@@ -1516,6 +1598,7 @@ app.get('/api/export', (_req, res) => {
       ...(b.missing ? { missing: true } : {}),
       tags: tagsOf.get(b.id) ?? [],
       lists: inLists.get(b.id) ?? [],
+      bookmarks: marksOf.get(b.id) ?? [],
       progress: b.progress_page || b.progress_at ? { page: b.progress_page, ...(b.progress_pos != null ? { pos: b.progress_pos } : {}), at: iso(b.progress_at) } : null,
     })),
   });
