@@ -114,9 +114,9 @@ function openBook(wrap, book, { open, saved }) {
   const bar = h(
     'div',
     { class: 'flip-bar' },
+    h('span', { class: 'flip-sp' }),
     jump,
     h('span', { class: 'flip-tot' }, `/ ${total}`),
-    h('span', { class: 'flip-sp' }),
     placeBtn,
     h('button', { class: 'flip-btn icon', title: 'Open in the reader at this page (Enter)', 'aria-label': 'Open in the reader', onClick: () => toReader() }, icon('arrow-up-right', 14)),
     h('button', { class: 'flip-btn icon', title: 'Close (Esc)', 'aria-label': 'Close', onClick: () => close(true) }, icon('x', 14)),
