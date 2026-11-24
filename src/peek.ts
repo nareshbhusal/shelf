@@ -5,6 +5,7 @@ import * as mupdf from 'mupdf';
 import { LIBRARY_DIR } from './config.js';
 import type { BookRow } from './db.js';
 import { semaphore } from './util.js';
+import { mendedEpub } from './epubmend.js';
 import { comicPages, readEntry } from './zip.js';
 
 /**
@@ -45,7 +46,9 @@ async function openPdf(book: BookRow, abs: string): Promise<Opened | null> {
   }
   if ((await fs.stat(abs)).size > MUPDF_MAX_BYTES) return null;
   const epub = book.format === 'epub';
-  const doc = mupdf.Document.openDocument(await fs.readFile(abs), epub ? 'application/epub+zip' : 'application/pdf');
+  // an EPUB goes through a mended copy when its pictures are of a kind mupdf can't show (see epubmend.ts)
+  const bytes = (epub ? await mendedEpub(abs).catch(() => null) : null) ?? (await fs.readFile(abs));
+  const doc = mupdf.Document.openDocument(bytes, epub ? 'application/epub+zip' : 'application/pdf');
   if (epub) doc.layout(EPUB_PAGE.w, EPUB_PAGE.h, EPUB_PAGE.em);
   const o: Opened = { doc, pages: doc.countPages(), timer: setTimeout(() => close(key), IDLE_MS) };
   opened.set(key, o);
