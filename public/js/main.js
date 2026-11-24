@@ -411,7 +411,7 @@ async function onRoute() {
   } else if (route.name === 'read') {
     document.title = appName(); // the reader sets the real title once it knows the book
     main.replaceChildren();
-    const r = await createReader(route.rest[0], { page: Number(route.query.get('page')) || 0 });
+    const r = await createReader(route.rest[0], { page: Number(route.query.get('page')) || 0, frac: Number(route.query.get('frac')) || 0 });
     if (seq !== routeSeq) return r.destroy(); // navigated away while loading
     view = r;
     main.append(r.el);

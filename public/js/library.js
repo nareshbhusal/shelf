@@ -515,7 +515,10 @@ export function createLibraryView(route) {
       : null;
     const flipHere = () => {
       const wrap = card.querySelector('.cover-wrap');
-      const to = (page) => { const href = openHref(book); location.hash = `${href}${href.includes('?') ? '&' : '?'}page=${page}`; };
+      const to = (page, total) => { // an EPUB's pages here are not the reader's: it is told how far through the book this is
+        const href = openHref(book);
+        location.hash = `${href}${href.includes('?') ? '&' : '?'}${book.format === 'epub' ? `frac=${(((page - 1) / total) || 0).toFixed(4)}` : `page=${page}`}`;
+      };
       openFlip(wrap, book, { open: to, saved: () => replaceCard(book) });
     };
     const flipBtn = canFlip(book)

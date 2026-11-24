@@ -798,6 +798,7 @@ html[data-card-motion="0"] :is(.cover-wrap, .book3d, .book-stage, .ribbon, .badg
 .flipbtn { position: absolute; z-index: 2; bottom: 8px; left: 8px; width: 26px; height: 26px; border-radius: 50%; border: 0; display: none; align-items: center; justify-content: center; background: rgba(0,0,0,.62); color: #fff; padding: 0; }
 .card:hover .flipbtn { display: inline-flex; }
 html[data-flip-peek="0"] .flipbtn, html[data-flip-button="0"] .flipbtn, .view-list .flipbtn { display: none !important; }
+.cover-wrap.flip-wait { cursor: progress; filter: brightness(.82); transition: filter .2s; }
 .flip-layer { position: fixed; inset: 0; z-index: 55; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0); transition: background .3s ease-out; user-select: none; }
 .flip-layer.shown { background: rgba(0,0,0,var(--dim, .66)); }
 .flip-stage { display: flex; flex-direction: column; align-items: center; gap: 10px; transform-origin: 50% 50%; }

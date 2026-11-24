@@ -26,7 +26,7 @@ function loadPdfjs() {
  *   setWidth(px), goTo(n), destroy() (+ restore/step/... for EPUB, whose position is section + fraction)
  * This shell handles the toolbar, current-page tracking, progress saving, zoom and keys.
  */
-export async function createReader(bookId, { page: startPage = 0 } = {}) {
+export async function createReader(bookId, { page: startPage = 0, frac: startFrac = 0 } = {}) {
   let book;
   try {
     book = await api.get(`/books/${bookId}`);
@@ -661,11 +661,12 @@ export async function createReader(bookId, { page: startPage = 0 } = {}) {
       impl.setMode?.(mode, rtl);
       scroller.focus({ preventScroll: true });
       if (isEpub) {
-        const at = explicit || (epubDone ? 1 : book.progress.page || 1);
-        const pos = explicit || epubDone ? 0 : savedPos;
+        const from = startFrac > 0 && weights ? locate(startFrac) : null; // ?frac=: how far through the book, from the flip-through on a card
+        const at = explicit || from?.sec || (epubDone ? 1 : book.progress.page || 1);
+        const pos = from ? from.pos : explicit || epubDone ? 0 : savedPos;
         currentPage = 0; // force the first report through
         await impl.restore(at, pos);
-        if (!explicit && (at > 1 || pos > 0.02)) toast(`Resumed at ${Math.floor(fractionAt(at, pos) * 100)}%`, 'quiet');
+        if (!explicit && !from && (at > 1 || pos > 0.02)) toast(`Resumed at ${Math.floor(fractionAt(at, pos) * 100)}%`, 'quiet');
       } else if (resumeAt > 1 || (!explicit && savedPos > 0.02 && !(book.pages && book.progress.page >= book.pages))) {
         // Back to the page you were on, and to the spot within it when we know that (older saves have only the page).
         const within = !explicit && book.progress.page === resumeAt ? savedPos : 0;

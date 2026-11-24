@@ -3,7 +3,7 @@ import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { DATA_DIR, HOST, HOST_LIBRARY, IN_DOCKER, LIBRARY_DIR, OPENER_SOCKET, PDFJS_DIR, PORT, READONLY, ROOT, SESSIONS_CMD, SHELF_NAME } from './config.js';
 import { AUTH_ON, authGate } from './auth.js';
-import { PeekError, peekPage, peekText } from './peek.js';
+import { PeekError, peekPage, peekPages, peekText } from './peek.js';
 import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb, spineColour } from './covers.js';
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
@@ -544,6 +544,17 @@ app.post('/api/books/:id/cover/rebuild', async (req, res) => {
   res.json({ ok: true, cover: !!(await ensureThumb(book)) });
 });
 
+// How many pages the flip-through of this book has (for an EPUB: as laid out for it, which is not the reader's estimate).
+app.get('/api/books/:id/peek', async (req, res) => {
+  const book = getBook(req.params.id);
+  try {
+    res.json({ pages: await peekPages(book) });
+  } catch (e) {
+    if (e instanceof PeekError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
+});
+
 // One page, small, for flipping through a book on its card. The URL carries the file's fingerprint, so browsers may keep it.
 app.get('/api/books/:id/peek/:n', async (req, res) => {
   const book = getBook(req.params.id);
@@ -958,12 +969,27 @@ app.post('/api/resolve', (req, res) => {
 
 app.put('/api/books/:id/progress', async (req, res) => {
   const book = getBook(req.params.id);
-  let page = toInt(req.body?.page);
+  const byFrac = book.format === 'epub' && req.body?.page === undefined && typeof req.body?.frac === 'number' && Number.isFinite(req.body.frac);
+  let page = byFrac ? 1 : toInt(req.body?.page);
+  let at: number | null = null; // EPUB, told only how far through the book: which section and where in it
+  if (byFrac) {
+    const st = await epubStructure(`${book.id}:${book.fingerprint}`, absPath(book)).catch(() => null);
+    const chars = st?.chars ?? [];
+    const all = chars.reduce((x, y) => x + y, 0);
+    if (all > 0) {
+      const target = Math.min(1, Math.max(0, req.body.frac)) * all;
+      let acc = 0;
+      for (let k = 0; k < chars.length; k++) {
+        if (target < acc + chars[k] || k === chars.length - 1) { page = k + 1; at = chars[k] ? Math.min(1, Math.max(0, (target - acc) / chars[k])) : 0; break; }
+        acc += chars[k];
+      }
+    }
+  }
   if (page < 1) page = 1;
   if (book.format !== 'epub' && book.pages && page > book.pages) page = book.pages; // (an EPUB's page is a section number)
   // EPUB: where inside the section (0..1), and how far through the whole book. Other formats don't send them.
   const unit = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : null);
-  const pos = unit(req.body?.pos);
+  const pos = at ?? unit(req.body?.pos);
   let frac = unit(req.body?.frac);
   if (frac === null && book.format === 'epub' && pos !== null) {
     // A client that only knows (section, spot): work out how far through the book that is.

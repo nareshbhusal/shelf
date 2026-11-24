@@ -8,10 +8,10 @@ import { createFlipNotes } from './flipnotes.js';
 // Flipping through a book from its card, without opening the reader. The book lifts out of the shelf into a larger one in front of it (the
 // card stays where it is): a closed book whose cover swings open to a two-page spread, with the pages read on the left and the pages still
 // to read on the right, both as stacks of paper whose thickness follows how many pages each side holds. Pages turn as double-sided leaves
-// hinged at the spine. The pages are pictures the server draws on request (PDF and comic files; an EPUB has no fixed pages). Nothing is saved:
-// not your place, not the pictures. Open in the reader (Enter, or the button) to carry on from the page you are looking at.
+// hinged at the spine. The pages are pictures the server draws on request (PDF and comic files; an EPUB is laid out into pages for it, so its page numbers
+// are the flip-through's own, not the reader's). Nothing is saved unless you ask: not your place, not the pictures. Open in the reader (Enter, or the button) to carry on from the page you are looking at.
 
-export const canFlip = (book) => (book.format === 'pdf' || book.format === 'cbz') && !book.isFolder && book.pages > 1;
+export const canFlip = (book) => (book.format === 'pdf' || book.format === 'cbz' || book.format === 'epub') && !book.isFolder && book.pages > 1;
 
 let active = null; // only one book is open at a time
 
@@ -23,9 +23,26 @@ export function closeFlip(animate = false) {
 /**
  * @param {HTMLElement} wrap  the .cover-wrap of the card (where the book lifts from and settles back to)
  * @param {object} book
- * @param {{ open: (page: number) => void, saved?: () => void }} cb  `saved` is told, once the book has gone back, that you set your place from here
+ * @param {{ open: (page: number, total: number) => void, saved?: () => void }} cb  `saved` is told, once the book has gone back, that you set your place from here
  */
-export function openFlip(wrap, book, { open, saved }) {
+export function openFlip(wrap, book, cb) {
+  if (book.format !== 'epub') return openBook(wrap, book, cb);
+  // An EPUB's pages exist once the server has laid the book out: ask how many there are before the book opens (it keeps the layout for the turns that follow).
+  if (active) active.close(false);
+  let stopped = false;
+  const waiting = { close() { stopped = true; wrap.classList.remove('flip-wait'); if (active === waiting) active = null; } };
+  active = waiting;
+  wrap.classList.add('flip-wait');
+  api.get(`/books/${book.id}/peek`).then(({ pages }) => {
+    if (stopped) return;
+    waiting.close();
+    // the same book, with the pages it has here (anything the viewer writes to it lands on this copy; setting your place is told to the server instead)
+    openBook(wrap, Object.assign(Object.create(book), { pages }), cb);
+  }).catch(() => waiting.close());
+  return waiting;
+}
+
+function openBook(wrap, book, { open, saved }) {
   if (active) active.close(false);
   const total = book.pages;
   const dpr = window.devicePixelRatio || 1;
@@ -181,17 +198,18 @@ export function openFlip(wrap, book, { open, saved }) {
   function toReader() {
     const page = pos === 0 ? 1 : rightPage();
     close(false);
-    open(page);
+    open(page, total);
   }
   async function setPlace() {
     const page = pos === 0 ? 1 : rightPage();
     try {
-      await api.put(`/books/${book.id}/progress`, { page, pos: 0 });
+      // an EPUB is told how far through the book this page is (the reader finds the section and spot); the others, the page
+      const saved = await api.put(`/books/${book.id}/progress`, book.format === 'epub' ? { frac: (page - 1) / total } : { page, pos: 0 });
+      book.progress = { ...book.progress, page: saved.page ?? page, pos: saved.pos ?? 0, frac: saved.frac ?? null, at: Date.now() };
     } catch {
       placeBtn.title = 'Could not save your place';
       return;
     }
-    book.progress = { ...book.progress, page, pos: 0, at: Date.now() };
     placed = true;
     placeBtn.replaceChildren(icon('check', 14));
     placeBtn.title = `Your place is now page ${page}`;
@@ -405,7 +423,8 @@ export function openFlip(wrap, book, { open, saved }) {
     ui();
     await lift(false);
     if (leaving) return;
-    const at = book.progress?.page > 0 && book.progress.page <= total ? book.progress.page : 1;
+    const sec = book.format === 'epub' ? (book.progress?.at ? Math.round((book.progress.frac ?? 0) * total) : 0) : book.progress?.page; // an EPUB's saved place is a section and a spot: from how far through it is
+    const at = sec > 0 && sec <= total ? sec : 1;
     goPage(at);
   });
   return handle;

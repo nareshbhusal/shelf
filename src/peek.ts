@@ -8,14 +8,18 @@ import { semaphore } from './util.js';
 import { comicPages, readEntry } from './zip.js';
 
 /**
- * One page of a PDF or a comic archive, drawn small, for flipping through a book on its card without opening the reader.
+ * One page of a PDF, an EPUB or a comic archive, drawn small, for flipping through a book on its card without opening the reader.
  * Nothing is written to disk: pages are made on request, a few recent ones are kept in memory, and the browser keeps the rest.
  */
 
 const limit = semaphore(2);
 const MUPDF_MAX_BYTES = 120 * 1024 * 1024; // the same limit as covers: bigger files are not held in memory
 
-// A PDF that is being flipped through stays open for a short while, so each turn doesn't read the whole file again.
+// An EPUB has no pages of its own: mupdf lays the book out into pages of this size (points) and this type size, which is what is flipped through. The count is
+// therefore the flip-through's own, not the reader's estimate. Shaped like a paperback page.
+const EPUB_PAGE = { w: 420, h: 620, em: 12 };
+
+// A PDF or EPUB that is being flipped through stays open for a short while, so each turn doesn't read the whole file again.
 interface Opened { doc: mupdf.Document; pages: number; timer: NodeJS.Timeout }
 const opened = new Map<string, Opened>();
 const IDLE_MS = 30_000;
@@ -40,7 +44,9 @@ async function openPdf(book: BookRow, abs: string): Promise<Opened | null> {
     return have;
   }
   if ((await fs.stat(abs)).size > MUPDF_MAX_BYTES) return null;
-  const doc = mupdf.Document.openDocument(await fs.readFile(abs), 'application/pdf');
+  const epub = book.format === 'epub';
+  const doc = mupdf.Document.openDocument(await fs.readFile(abs), epub ? 'application/epub+zip' : 'application/pdf');
+  if (epub) doc.layout(EPUB_PAGE.w, EPUB_PAGE.h, EPUB_PAGE.em);
   const o: Opened = { doc, pages: doc.countPages(), timer: setTimeout(() => close(key), IDLE_MS) };
   opened.set(key, o);
   while (opened.size > MAX_OPEN) close(opened.keys().next().value as string);
@@ -63,9 +69,9 @@ export function peekPage(book: BookRow, n: number, width: number): Promise<Buffe
   return limit(async () => {
     const abs = path.join(LIBRARY_DIR, book.path);
     let img: Buffer;
-    if (book.format === 'pdf') {
+    if (book.format === 'pdf' || book.format === 'epub') {
       const o = await openPdf(book, abs);
-      if (!o) throw new PeekError(413, 'this PDF is too large to preview here');
+      if (!o) throw new PeekError(413, 'this file is too large to preview here');
       if (n < 1 || n > o.pages) throw new PeekError(404, 'page out of range');
       const page = o.doc.loadPage(n - 1);
       const [x0, , x1] = page.getBounds();
@@ -80,11 +86,22 @@ export function peekPage(book: BookRow, n: number, width: number): Promise<Buffe
       const raw = book.is_folder ? await fs.readFile(path.join(abs, pages[n - 1])) : await readEntry(abs, pages[n - 1]);
       img = await sharp(raw, { failOn: 'none' }).rotate().resize({ width: w, withoutEnlargement: true }).jpeg({ quality: 76 }).toBuffer();
     } else {
-      throw new PeekError(400, 'only PDF and comic files can be flipped through');
+      throw new PeekError(400, 'only PDF, EPUB and comic files can be flipped through');
     }
     recent.set(key, img);
     while (recent.size > KEEP) recent.delete(recent.keys().next().value as string);
     return img;
+  });
+}
+
+/** How many pages the flip-through has: the file's own for a PDF, as laid out here for an EPUB. */
+export function peekPages(book: BookRow): Promise<number> {
+  if (book.format === 'cbz') return comicPages(`${book.id}:${book.fingerprint}`, path.join(LIBRARY_DIR, book.path), !!book.is_folder).then((p) => p.length);
+  if (book.format !== 'pdf' && book.format !== 'epub') return Promise.reject(new PeekError(400, 'only PDF, EPUB and comic files can be flipped through'));
+  return limit(async () => {
+    const o = await openPdf(book, path.join(LIBRARY_DIR, book.path));
+    if (!o) throw new PeekError(413, 'this file is too large to preview here');
+    return o.pages;
   });
 }
 
