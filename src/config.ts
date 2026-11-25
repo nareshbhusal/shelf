@@ -42,6 +42,8 @@ export const IGNORE: string[] = (() => {
 /** The docsessions command; empty = the Sessions feature is off (shelf file "sessions", or SHELF_SESSIONS). */
 export const SESSIONS_CMD: string[] = spec ? spec.sessions : splitCommand(process.env.SHELF_SESSIONS ?? '');
 export const THUMB_DIR = path.join(DATA_DIR, 'thumbs');
+/** Where each page of an EPUB starts, as laid out for the flip-through viewer (see epubpages.ts). Small JSON files; they can be deleted at any time. */
+export const EPUB_PAGES_DIR = path.join(DATA_DIR, 'epubpages');
 /** Scratch space. Everything Shelf writes outside the library goes under DATA_DIR, never the system /tmp. */
 export const TMP_DIR = path.join(DATA_DIR, 'tmp');
 export const PDFJS_DIR = path.join(ROOT, 'node_modules', 'pdfjs-dist');
@@ -83,5 +85,6 @@ export const IMAGE_MIME: Record<string, string> = {
 };
 
 fs.mkdirSync(THUMB_DIR, { recursive: true });
+fs.mkdirSync(EPUB_PAGES_DIR, { recursive: true });
 fs.mkdirSync(TMP_DIR, { recursive: true });
 for (const f of fs.readdirSync(TMP_DIR)) fs.rmSync(path.join(TMP_DIR, f), { recursive: true, force: true }); // leftovers of a killed run

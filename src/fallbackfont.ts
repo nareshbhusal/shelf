@@ -76,3 +76,11 @@ export function fallbackFontFile(family: string, bold: boolean, italic: boolean)
   const data = faces.get(key) ?? faces.get(`${kind}:r`) ?? faces.get('serif:r');
   return data ? { key: faces.has(key) ? key : `${kind}:r`, data } : null;
 }
+
+/** The four faces of the stand-in serif (regular, bold, italic, bold italic) to put inside a book, or null when none could be found. */
+export async function fallbackFaces(): Promise<Record<Style, Buffer> | null> {
+  await loadFallbackFonts();
+  const r = faces.get('serif:r');
+  if (!r) return null;
+  return { r, b: faces.get('serif:b') ?? r, i: faces.get('serif:i') ?? r, bi: faces.get('serif:bi') ?? r };
+}

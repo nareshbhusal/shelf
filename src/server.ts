@@ -8,6 +8,7 @@ import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb, spineColour } from
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
+import { epubPages, knownPages } from './epubpages.js';
 import { listTrash, moveToTrash, restoreFromTrash } from './trash.js';
 import { ds, listSessions, one, pathsFor, SessionError, type SessionOut } from './sessions.js';
 import { EPUB_MIME, epubStructure, pagesFromChars } from './epub.js';
@@ -569,6 +570,18 @@ app.get('/api/books/:id/peek/:n', async (req, res) => {
   }
 });
 
+// Where every page of an EPUB, as the flip-through viewer lays it out, starts in the reader's terms (see epubpages.ts): one page count for both.
+app.get('/api/books/:id/epub-pages', async (req, res) => {
+  const book = getBook(req.params.id);
+  if (book.format !== 'epub') throw new HttpError(400, 'not an EPUB');
+  try {
+    res.json(await epubPages(book));
+  } catch (e) {
+    if (e instanceof PeekError) throw new HttpError(e.status, e.message);
+    throw e;
+  }
+});
+
 // Where the words of one page are (fractions of the page), so the viewer can make the text selectable.
 app.get('/api/books/:id/peek/:n/text', async (req, res) => {
   const book = getBook(req.params.id);
@@ -630,7 +643,7 @@ app.get('/api/books/:id/epub', async (req, res) => {
   }
   // Pages are estimated from the text (see epub.ts); keep the index in step with what the reader will show.
   const chars = st.chars ?? st.spine.map(() => 1);
-  const pages = pagesFromChars(chars);
+  const pages = knownPages(book) ?? pagesFromChars(chars); // the viewer's count once it has been worked out, else an estimate from the text
   if (book.pages !== pages) db.prepare('UPDATE books SET pages = ? WHERE id = ?').run(pages, book.id);
   res.setHeader('Cache-Control', 'no-cache');
   res.json({
@@ -1068,7 +1081,7 @@ app.post('/api/books/:id/bookmarks', async (req, res) => {
   if (book.format !== 'epub' && book.pages && page > book.pages) page = book.pages;
   // The same place twice is one bookmark: the same page, or for an EPUB, the same spot (about a fifth of a page apart).
   const near = book.format === 'epub' && frac !== null
-    ? (db.prepare('SELECT * FROM bookmarks WHERE book_id = ? AND frac IS NOT NULL AND ABS(frac - ?) < 0.0005').get(book.id, frac) as BookmarkRow | undefined)
+    ? (db.prepare('SELECT * FROM bookmarks WHERE book_id = ? AND frac IS NOT NULL AND ABS(frac - ?) < 0.00005').get(book.id, frac) as BookmarkRow | undefined)
     : (db.prepare('SELECT * FROM bookmarks WHERE book_id = ? AND page = ?').get(book.id, page) as BookmarkRow | undefined);
   if (near) return void res.json({ ...bookmarkOut(near), existing: true });
   const label = cleanLabel(req.body?.label);
@@ -1296,6 +1309,9 @@ function notesGuard<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 app.get('/api/books/:id/annotations', (req, res) => {
+  const book = getBook(req.params.id);
+  // (the flip-through viewer asks for every book it can select text in; an EPUB or a comic has none, which is a plain "not supported", not an error)
+  if (book.format !== 'pdf') return void res.json({ canWrite: false, reason: 'Highlights and notes are only stored in PDF files', supported: false, items: [] });
   const { abs } = pdfOf(req.params.id);
   const caps = notesCapabilities(abs, READONLY);
   try {

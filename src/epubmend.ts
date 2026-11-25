@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import sharp from 'sharp';
+import { fallbackFaces } from './fallbackfont.js';
 import { listEntries, readEntries, readEntry } from './zip.js';
 
 /**
@@ -120,6 +121,33 @@ async function unscrambleFonts(abs: string, entries: Array<{ name: string }>): P
   return { files, encryption: /<(?:\w+:)?EncryptedData\b/i.test(rest) ? rest : null };
 }
 
+/**
+ * Letters mupdf can't be trusted with: the dotted and dashed letters of transliterated Sanskrit and Pali, Vietnamese and the like (Latin Extended Additional),
+ * and a letter with a combining mark after it. A book's own font may lack them or draw an empty box for them, and mupdf only borrows a letter from another font
+ * when the font has no glyph for it at all. So each run of them is wrapped in a span set in a font that is put inside the copy of the book (from here, see
+ * fallbackfont.ts), and the box never shows. This is what a browser does by itself when it shows the same book.
+ */
+const SPECIAL = /[A-Za-z]?[̀-ͯ]+|[Ḁ-ỿ]+/g;
+const FB_DIR = 'shelf-fb';
+const FB_FILE: Record<string, string> = { r: 'regular.ttf', b: 'bold.ttf', i: 'italic.ttf', bi: 'bolditalic.ttf' };
+
+export function wrapSpecial(entry: string, html: string): string {
+  // numeric references to those letters (&#7751;) are made plain first, so they are found too
+  let text = html.replace(/&#(x[0-9a-f]+|\d+);/gi, (m, n: string) => {
+    const cp = n[0] === 'x' || n[0] === 'X' ? parseInt(n.slice(1), 16) : parseInt(n, 10);
+    return (cp >= 0x1e00 && cp <= 0x1eff) || (cp >= 0x300 && cp <= 0x36f) ? String.fromCodePoint(cp) : m;
+  });
+  if (!(new RegExp(SPECIAL.source)).test(text)) return html;
+  text = text.replace(/(<!--[\s\S]*?-->|<(?:script|style)\b[\s\S]*?<\/(?:script|style)>)|(<[^>]*>)|([^<]+)/gi, (m, keep: string | undefined, tag: string | undefined, run: string | undefined) =>
+    keep ?? tag ?? (run as string).replace(SPECIAL, (x) => `<span style="font-family:ShelfFB">${x}</span>`));
+  const rel = path.posix.relative(path.posix.dirname(entry), FB_DIR) || FB_DIR;
+  const face = (key: string, weight: string, style: string) => `@font-face{font-family:"ShelfFB";font-weight:${weight};font-style:${style};src:url("${rel}/${FB_FILE[key]}")}`;
+  const css = `<style type="text/css">${face('r', 'normal', 'normal')}${face('b', 'bold', 'normal')}${face('i', 'normal', 'italic')}${face('bi', 'bold', 'italic')}</style>`;
+  if (/<\/head>/i.test(text)) return text.replace(/<\/head>/i, `${css}</head>`);
+  if (/<head\b[^>]*>/i.test(text)) return text.replace(/<head\b[^>]*>/i, (h) => `${h}${css}`);
+  return text.replace(/<body\b/i, `<head>${css}</head><body`);
+}
+
 export interface Mended {
   /** The corrected book, or null when the file as it is will do. */
   bytes: Buffer | null;
@@ -134,11 +162,15 @@ export async function mendedEpub(abs: string): Promise<Mended> {
   const changed = new Map<string, Buffer>();
   const removed = new Set<string>();
   let needsFont = false;
+  const faces = await fallbackFaces().catch(() => null); // the stand-in letters' font, which goes into the copy
+  let usedFaces = false;
   await readEntries(abs, new Set(html.map((e) => e.name)), (name, data) => {
     const text = data.toString('utf8');
     if (!needsFont && NEEDS_FONT.test(text)) needsFont = true;
-    const fixed = mendHtml(name, text);
+    let fixed = mendHtml(name, text);
+    if (faces) fixed = wrapSpecial(name, fixed);
     if (fixed !== text) changed.set(name, Buffer.from(fixed, 'utf8'));
+    if (faces && fixed.includes('font-family:ShelfFB')) usedFaces = true;
   }, MAX_HTML);
   const fonts = await unscrambleFonts(abs, entries).catch(() => null);
   if (fonts) {
@@ -156,6 +188,8 @@ export async function mendedEpub(abs: string): Promise<Mended> {
       } catch { /* left as it is: shown as "[image]" */ }
     }
   }
+  const added = new Map<string, Buffer>();
+  if (faces && usedFaces) for (const k of Object.keys(FB_FILE)) added.set(`${FB_DIR}/${FB_FILE[k]}`, faces[k as keyof typeof faces]);
   if (!changed.size && !removed.size) return { bytes: null, needsFont };
   const total = entries.reduce((a, e) => a + e.size, 0);
   if (total > MAX_BYTES) return { bytes: null, needsFont };
@@ -168,5 +202,6 @@ export async function mendedEpub(abs: string): Promise<Mended> {
     const data = changed.get(n) ?? rest.get(n);
     if (data) all.push({ name: n, data });
   }
+  for (const [name, data] of added) all.push({ name, data });
   return { bytes: zipOf(all), needsFont };
 }

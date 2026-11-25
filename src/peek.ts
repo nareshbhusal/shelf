@@ -19,7 +19,7 @@ const MUPDF_MAX_BYTES = 120 * 1024 * 1024; // the same limit as covers: bigger f
 
 // An EPUB has no pages of its own: mupdf lays the book out into pages of this size (points) and this type size, which is what is flipped through. The count is
 // therefore the flip-through's own, not the reader's estimate. Shaped like a paperback page.
-const EPUB_PAGE = { w: 420, h: 620, em: 12 };
+export const EPUB_PAGE = { w: 420, h: 620, em: 12 };
 
 // A PDF or EPUB that is being flipped through stays open for a short while, so each turn doesn't read the whole file again.
 interface Opened { doc: mupdf.Document; pages: number; timer: NodeJS.Timeout; needsFont: boolean; epub: boolean }
@@ -150,12 +150,34 @@ export function peekPages(book: BookRow): Promise<number> {
   });
 }
 
+/** The text of every page of an EPUB as laid out here (for epubpages.ts). Taken a few pages at a time, so that the server stays responsive and page requests are not held up. */
+export async function peekAllText(book: BookRow): Promise<string[]> {
+  const total = await peekPages(book);
+  const out: string[] = [];
+  for (let a = 0; a < total; a += 24) {
+    await limit(async () => {
+      const o = await openPdf(book, path.join(LIBRARY_DIR, book.path));
+      if (!o) throw new PeekError(413, 'this file is too large to preview here');
+      for (let n = a; n < Math.min(total, a + 24); n++) {
+        const page = o.doc.loadPage(n);
+        try {
+          const st = page.toStructuredText('preserve-whitespace');
+          try { out.push(st.asText()); } finally { try { st.destroy(); } catch { /* not needed */ } }
+        } finally {
+          try { page.destroy(); } catch { /* not needed */ }
+        }
+      }
+    });
+  }
+  return out;
+}
+
 /** Where the words of a page are, as fractions (0..1) of the page: [x, y, width, height, word]. Lets the viewer lay selectable text over the picture. */
 const recentText = new Map<string, TextWord[]>();
 export type TextWord = [number, number, number, number, string];
 
 export function peekText(book: BookRow, n: number): Promise<TextWord[]> {
-  if (book.format !== 'pdf') return Promise.resolve([]);
+  if (book.format !== 'pdf' && book.format !== 'epub') return Promise.resolve([]);
   const key = `${book.fingerprint}:${n}`;
   const hit = recentText.get(key);
   if (hit) return Promise.resolve(hit);

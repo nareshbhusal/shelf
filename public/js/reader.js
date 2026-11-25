@@ -11,6 +11,7 @@ import { toast } from './ui.js';
 import { clearMarks, createSearch, markMatches } from './search.js';
 import { createReaderFlip } from './readerflip.js';
 import { createBookmarks } from './bookmarks.js';
+import { fracOf, loadEpubPages, pageOf } from './epubpages.js';
 
 const PDFJS = '/vendor/pdfjs';
 let pdfjsPromise = null;
@@ -53,6 +54,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
   let total = isEpub ? 0 : book.pages ?? 0; // (EPUB: number of sections; its pages are an estimate, see `estPages`)
   let weights = null; // EPUB: text length of each section, so a position can be told as a fraction of the book
   let estPages = book.pages ?? 0;
+  let pageTable = null; // EPUB: where each page of the viewer's layout starts (epubpages.js); until it is here the page numbers are an estimate
   let saveTimer = null;
   let currentPos = 0; // EPUB only: how far into the current section (0..1)
   let lastSaved = book.progress.page || 0;
@@ -84,13 +86,14 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
   const widthKey = book.format === 'pdf' ? 'pdfWidth' : isEpub ? 'epubWidth' : 'comicWidth';
   const pageInput = h('input', { class: 'page-input', type: 'text', inputMode: 'numeric', value: '1', 'aria-label': 'Page number' });
   const pageTotal = h('span', { class: 'muted' }, total ? `/ ${total}` : '');
-  /** EPUB: the page number is an estimate (about 1800 characters a page), so it is shown and typed as one. */
-  const estPage = () => clamp(Math.ceil(bookFraction() * estPages), 1, Math.max(1, estPages));
+  /** EPUB: the page the reader is on. These are the flip-through viewer's pages (once the table is here; until then an estimate, about 1800 characters a page). */
+  const estPage = () => (pageTable ? pageOf(pageTable, bookFraction()) : clamp(Math.ceil(bookFraction() * estPages), 1, Math.max(1, estPages)));
+  const tilde = () => (pageTable ? '' : '~');
   function epubBox() {
     if (!isEpub) return;
     pageBox.classList.toggle('hidden', !estPages);
-    pageTotal.textContent = estPages ? `/ ~${estPages}` : '';
-    pageTotal.title = 'Estimated pages, about 1800 characters each';
+    pageTotal.textContent = estPages ? `/ ${tilde()}${estPages}` : '';
+    pageTotal.title = pageTable ? 'Pages, as the flip-through shows them' : 'Estimated pages, about 1800 characters each';
     if (document.activeElement !== pageInput) pageInput.value = String(estPage());
   }
   // Bookmarks: any number, kept by Shelf. An EPUB's are told by section, spot and how far through the book (see bookFraction).
@@ -98,8 +101,8 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     host: root,
     bookId: () => book.id,
     place: () => (isEpub ? (weights && currentPage > 0 ? { page: currentPage, pos: Math.round(currentPos * 1000) / 1000, frac: Math.round(bookFraction() * 10000) / 10000 } : null) : total && currentPage > 0 ? { page: currentPage, pos: Math.round(readingPos() * 1000) / 1000 } : null),
-    same: (m, p) => (isEpub ? m.frac != null && Math.abs(m.frac - p.frac) <= 0.5 / Math.max(1, estPages) : m.page === p.page),
-    describe: (m) => (isEpub ? `${estPages ? `p. ~${clamp(Math.ceil((m.frac ?? 0) * estPages), 1, estPages)} · ` : ''}${Math.floor((m.frac ?? 0) * 100)}%` : `Page ${m.page}`),
+    same: (m, p) => (isEpub ? m.frac != null && (pageTable ? pageOf(pageTable, m.frac) === pageOf(pageTable, p.frac) : Math.abs(m.frac - p.frac) <= 0.5 / Math.max(1, estPages)) : m.page === p.page),
+    describe: (m) => (isEpub ? `${estPages ? `p. ${tilde()}${pageTable ? pageOf(pageTable, m.frac ?? 0) : clamp(Math.ceil((m.frac ?? 0) * estPages), 1, estPages)} · ` : ''}${Math.floor((m.frac ?? 0) * 100)}%` : `Page ${m.page}`),
     jump: (m) => (isEpub ? impl?.goToPos?.(m.page, m.pos ?? 0) : impl?.goTo(m.page, true)),
   });
   const bar = h(
@@ -153,7 +156,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     updateCount();
   }
   function epubWhere() {
-    return estPages ? `p. ~${estPage()}/~${estPages} · ${bookPercent()}%` : `${bookPercent()}%`;
+    return estPages ? `p. ${tilde()}${estPage()}/${tilde()}${estPages} · ${bookPercent()}%` : `${bookPercent()}%`;
   }
   function updateCount() {
     let t = '';
@@ -483,7 +486,11 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
       if (isEpub) {
         // A page of the estimate ("120"), or a share of the book ("45%").
         if (Number.isFinite(n) && weights && impl?.goToPos) {
-          const frac = txt.endsWith('%') ? clamp(n / 100, 0, 1) : clamp((clamp(n, 1, Math.max(1, estPages)) - 0.5) / Math.max(1, estPages), 0, 1);
+          const frac = txt.endsWith('%')
+            ? clamp(n / 100, 0, 1)
+            : pageTable
+              ? fracOf(pageTable, clamp(n, 1, estPages)) // the top of that page
+              : clamp((clamp(n, 1, Math.max(1, estPages)) - 0.5) / Math.max(1, estPages), 0, 1);
           const at = locate(frac);
           impl.goToPos(at.sec, at.pos);
         }
@@ -664,10 +671,19 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
             total = n;
             weights = chars;
             weights.total = chars.reduce((a, b) => a + b, 0) || 1;
-            if (pages) estPages = pages;
+            if (pages && !pageTable) estPages = pages;
             epubBox();
             setTitles();
           },
+        });
+        // the viewer's page table, in the background: from then on the pages shown here are the viewer's (exactly, no longer an estimate)
+        loadEpubPages(book).then((t) => {
+          if (!t.exact || dead) return;
+          pageTable = t;
+          estPages = t.total;
+          epubBox();
+          setTitles();
+          bookmarks.refresh();
         });
       } else throw new Error(`${book.format.toUpperCase()} files can't be read here yet`);
       if (dead) return impl.destroy();

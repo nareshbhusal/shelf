@@ -5,6 +5,7 @@ import { castOf, swing, sweep, turnMs } from './leaf.js';
 import { MARGIN, bulkOf, clothOf, edgesOf, makeDecor, placeDecor } from './bookdecor.js';
 import { createFlipNotes } from './flipnotes.js';
 import { createBookmarks } from './bookmarks.js';
+import { fracOf, loadEpubPages, pageOf } from './epubpages.js';
 
 // Flipping through a book from its card, without opening the reader. The book lifts out of the shelf into a larger one in front of it (the
 // card stays where it is): a closed book whose cover swings open to a two-page spread, with the pages read on the left and the pages still
@@ -24,7 +25,7 @@ export function closeFlip(animate = false) {
 /**
  * @param {HTMLElement} wrap  the .cover-wrap of the card (where the book lifts from and settles back to)
  * @param {object} book
- * @param {{ open: (page: number, total: number) => void, saved?: () => void }} cb  `saved` is told, once the book has gone back, that you set your place from here
+ * @param {{ open: (page: number, total: number, frac?: number) => void, saved?: () => void }} cb  `saved` is told, once the book has gone back, that you set your place from here
  */
 export function openFlip(wrap, book, cb) {
   if (book.format !== 'epub') return openBook(wrap, book, cb);
@@ -34,11 +35,12 @@ export function openFlip(wrap, book, cb) {
   const waiting = { close() { stopped = true; wrap.classList.remove('flip-wait'); if (active === waiting) active = null; } };
   active = waiting;
   wrap.classList.add('flip-wait');
-  api.get(`/books/${book.id}/peek`).then(({ pages }) => {
+  Promise.all([api.get(`/books/${book.id}/peek`), loadEpubPages(book)]).then(([{ pages }, table]) => {
     if (stopped) return;
     waiting.close();
-    // the same book, with the pages it has here (anything the viewer writes to it lands on this copy; setting your place is told to the server instead)
-    openBook(wrap, Object.assign(Object.create(book), { pages }), cb);
+    // the same book, with the pages it has here (anything the viewer writes to it lands on this copy; setting your place is told to the server instead);
+    // `table` says where each page starts, in the reader's terms, so a page here is a spot there
+    openBook(wrap, Object.assign(Object.create(book), { pages: table.exact ? table.total : pages, table }), cb);
   }).catch(() => waiting.close());
   return waiting;
 }
@@ -88,7 +90,7 @@ function openBook(wrap, book, { open, saved }) {
     if (content === 'end') return into.replaceChildren();
     const img = await load(content);
     if (typeof content === 'number' && content >= 1) into.dataset.page = String(content);
-    // a PDF page also carries its highlights and notes (and, once at rest, its selectable words) in a box the shape of the picture
+    // a PDF page also carries its highlights and notes (and, an EPUB page too, once at rest, its selectable words) in a box the shape of the picture
     if (img && notes && content >= 1) await notes.ready;
     into.replaceChildren(img ? img.cloneNode() : h('span', { class: 'flip-miss' }, 'No preview'), ...(img && notes && content >= 1 ? [notes.pageBox(content, img)] : []));
   };
@@ -115,7 +117,8 @@ function openBook(wrap, book, { open, saved }) {
   // Bookmarks (any number, kept by Shelf): the right-hand page on show, like the place button. An EPUB's are told by how far through the book they are.
   const pageNow = () => (pos === 0 ? 1 : rightPage());
   const isEpub = book.format === 'epub';
-  const epubPage = (m) => Math.max(1, Math.min(total, Math.round((m.frac ?? 0) * total) + 1));
+  const table = book.table; // EPUB: where each page starts in the book (see epubpages.js)
+  const epubPage = (m) => pageOf(table, m.frac ?? 0);
   const marks = createBookmarks({
     host: () => layer,
     bookId: () => book.id,
@@ -123,8 +126,8 @@ function openBook(wrap, book, { open, saved }) {
     size: 14,
     below: false,
     dark: true,
-    place: () => (isEpub ? { frac: (pageNow() - 1) / total } : { page: pageNow(), pos: 0 }),
-    same: (m, p) => (isEpub ? m.frac != null && Math.abs(m.frac - p.frac) < 0.5 / total : m.page === p.page),
+    place: () => (isEpub ? { frac: fracOf(table, pageNow()) } : { page: pageNow(), pos: 0 }),
+    same: (m, p) => (isEpub ? m.frac != null && epubPage(m) === pageNow() : m.page === p.page),
     describe: (m) => `Page ${isEpub ? epubPage(m) : m.page}`,
     jump: (m) => goPage(isEpub ? epubPage(m) : m.page),
   });
@@ -147,7 +150,7 @@ function openBook(wrap, book, { open, saved }) {
   pane.style.setProperty('--land', '0'); // whether the left half of the book (board, edge, pages read) is there itself: not while the book is shut, nor while a cover turns
   pane.style.setProperty('--cast', '0'); // how dark the crease and the landing page are: nothing at rest, most while a leaf stands upright
   document.body.append(layer);
-  const notes = book.format === 'pdf' ? createFlipNotes({ book, pane, layer }) : null; // (hoisted use above is only inside functions, which run later)
+  const notes = book.format === 'pdf' || book.format === 'epub' ? createFlipNotes({ book, pane, layer }) : null; // (an EPUB gets the selection and Copy only: its pages have no place to keep highlights) // (hoisted use above is only inside functions, which run later)
 
   function clothColour() {
     return clothOf(book, { spineText: wrap.closest('.book-stage')?.style.getPropertyValue('--spine'), coverImg });
@@ -216,13 +219,13 @@ function openBook(wrap, book, { open, saved }) {
   function toReader() {
     const page = pos === 0 ? 1 : rightPage();
     close(false);
-    open(page, total);
+    open(page, total, isEpub ? fracOf(table, page) : undefined);
   }
   async function setPlace() {
     const page = pos === 0 ? 1 : rightPage();
     try {
       // an EPUB is told how far through the book this page is (the reader finds the section and spot); the others, the page
-      const saved = await api.put(`/books/${book.id}/progress`, book.format === 'epub' ? { frac: (page - 1) / total } : { page, pos: 0 });
+      const saved = await api.put(`/books/${book.id}/progress`, isEpub ? { frac: fracOf(table, page) } : { page, pos: 0 });
       book.progress = { ...book.progress, page: saved.page ?? page, pos: saved.pos ?? 0, frac: saved.frac ?? null, at: Date.now() };
     } catch {
       placeBtn.title = 'Could not save your place';
@@ -445,7 +448,7 @@ function openBook(wrap, book, { open, saved }) {
     ui();
     await lift(false);
     if (leaving) return;
-    const sec = book.format === 'epub' ? (book.progress?.at ? Math.round((book.progress.frac ?? 0) * total) : 0) : book.progress?.page; // an EPUB's saved place is a section and a spot: from how far through it is
+    const sec = isEpub ? (book.progress?.at ? pageOf(table, book.progress.frac ?? 0) : 0) : book.progress?.page; // an EPUB's saved place is how far through the book it is: the page that spot is on
     const at = sec > 0 && sec <= total ? sec : 1;
     goPage(at);
   });
