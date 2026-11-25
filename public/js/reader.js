@@ -11,6 +11,7 @@ import { toast } from './ui.js';
 import { clearMarks, createSearch, markMatches } from './search.js';
 import { createReaderFlip } from './readerflip.js';
 import { createBookmarks } from './bookmarks.js';
+import { createEpubNotes } from './epubnotes.js';
 import { fracOf, loadEpubPages, pageOf } from './epubpages.js';
 
 const PDFJS = '/vendor/pdfjs';
@@ -41,10 +42,22 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
   const scroller = h('div', { class: 'reader-scroll' });
   const pagesEl = h('div', { class: 'reader-pages' });
   scroller.append(pagesEl);
-  // Highlights and notes are stored in the PDF itself, so only PDFs get them.
+  // Highlights and notes: a PDF keeps its own inside the file; an EPUB's are kept in Shelf (see epubnotes.js); comics have none.
   const ann = book.format === 'pdf'
     ? createAnnotations({ book, root, scroller, pagesEl, bookName, goTo: (n, smooth) => impl?.goTo(n, smooth) })
-    : null;
+    : isEpub
+      ? createEpubNotes({
+        book, root, bookName,
+        fractionAt: (sec, pos) => fractionAt(sec, pos),
+        hintPos: (sec, frac) => {
+          const c = weights?.[sec - 1];
+          return c ? clamp((frac * weights.total - weights.slice(0, sec - 1).reduce((a, b) => a + b, 0)) / c, 0, 1) : null;
+        },
+        pageLabel: (frac) => (estPages ? `p. ${tilde()}${pageTable ? pageOf(pageTable, frac) : clamp(Math.ceil(frac * estPages), 1, estPages)}` : ''),
+        reveal: (sec, target) => impl?.reveal?.(sec, target),
+        toc: (open) => impl?.toggleToc?.(open),
+      })
+      : null;
 
   // Searching the text: PDFs and EPUBs (comics are pictures).
   const search = isEpub || book.format === 'pdf' ? createSearch({ source: () => impl?.searchSource ?? null, getUnit: () => currentPage - 1 }) : null;
@@ -666,7 +679,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
       }
       else if (isEpub) {
         impl = await epubImpl(book, {
-          root, scroller, pagesEl, bar, report: setPosition, onKey, onClick: onReadClick, onFind: () => search?.open(), getMode: () => mode,
+          root, scroller, pagesEl, bar, report: setPosition, onKey, onClick: onReadClick, onFind: () => search?.open(), getMode: () => mode, hooks: ann?.hooks,
           setTotal: (n, chars, pages) => {
             total = n;
             weights = chars;
@@ -684,6 +697,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
           epubBox();
           setTitles();
           bookmarks.refresh();
+          ann?.relabel?.();
         });
       } else throw new Error(`${book.format.toUpperCase()} files can't be read here yet`);
       if (dead) return impl.destroy();

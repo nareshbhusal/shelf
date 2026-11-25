@@ -4,6 +4,7 @@ import path from 'node:path';
 import { DATA_DIR, EXT_FORMAT, IGNORE, LIBRARY_DIR, type Format } from './config.js';
 import { db, type BookRow } from './db.js';
 import { cbzInfo, epubInfo, pdfMeta, type Meta } from './meta.js';
+import { knownPages, syncEpubPageCounts } from './epubpages.js';
 import { checkpoint, gcThumbs } from './hygiene.js';
 import { fingerprint, mapPool, pdfFileId, titleFromFilename } from './util.js';
 import { imageExt } from './zip.js';
@@ -209,7 +210,7 @@ function bookFields(f: Found, fp: string, meta: Meta, fileId = '') {
     author: meta.author ?? null,
     series: meta.series ?? null,
     number: meta.number ?? null,
-    pages: meta.pages ?? null,
+    pages: (f.format === 'epub' ? knownPages({ fingerprint: fp }) : null) ?? meta.pages ?? null, // (an EPUB whose pages were worked out keeps that count, not the estimate)
     is_folder: f.images ? 1 : 0,
     file_id: fileId,
   };
@@ -379,6 +380,7 @@ async function runScan(full: boolean): Promise<void> {
     db.transaction(() => ids.forEach(([fid, id]) => setFileId.run(fid, id)))();
   }
 
+  syncEpubPageCounts(); // (quick scans skip unchanged books, so their cards are put right here)
   scanState.added = inserts.length;
   scanState.moved = moves.length;
   scanState.updated = updates.length;
@@ -410,6 +412,7 @@ export async function mergeMissing(fromId: number, intoId: number): Promise<void
     db.prepare('INSERT OR IGNORE INTO book_tags (book_id, tag_id) SELECT ?, tag_id FROM book_tags WHERE book_id = ?').run(into.id, from.id);
     db.prepare('UPDATE list_items SET book_id = ? WHERE book_id = ? AND list_id NOT IN (SELECT list_id FROM list_items WHERE book_id = ?)').run(into.id, from.id, into.id);
     db.prepare('UPDATE bookmarks SET book_id = ? WHERE book_id = ?').run(into.id, from.id);
+    db.prepare('UPDATE epub_notes SET book_id = ? WHERE book_id = ?').run(into.id, from.id);
     if (into.progress_at === null && from.progress_at !== null) {
       db.prepare('UPDATE books SET progress_page = ?, progress_at = ?, progress_pos = ?, progress_frac = ? WHERE id = ?').run(
         from.progress_page, from.progress_at, from.progress_pos, from.progress_frac, into.id,

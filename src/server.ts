@@ -8,7 +8,7 @@ import { ensureThumb, forgetAllThumbs, forgetThumb, setThumb, spineColour } from
 import { db, type BookRow } from './db.js';
 import { checkpoint, storageStats } from './hygiene.js';
 import { buildArgv, helperAlive, launch, launchViaHelper, parseTemplate } from './launch.js';
-import { epubPages, knownPages } from './epubpages.js';
+import { epubPages, knownPages, sectionHolding } from './epubpages.js';
 import { listTrash, moveToTrash, restoreFromTrash } from './trash.js';
 import { ds, listSessions, one, pathsFor, SessionError, type SessionOut } from './sessions.js';
 import { EPUB_MIME, epubStructure, pagesFromChars } from './epub.js';
@@ -1310,8 +1310,9 @@ function notesGuard<T>(fn: () => Promise<T>): Promise<T> {
 
 app.get('/api/books/:id/annotations', (req, res) => {
   const book = getBook(req.params.id);
-  // (the flip-through viewer asks for every book it can select text in; an EPUB or a comic has none, which is a plain "not supported", not an error)
-  if (book.format !== 'pdf') return void res.json({ canWrite: false, reason: 'Highlights and notes are only stored in PDF files', supported: false, items: [] });
+  if (book.format === 'epub') return void res.json({ canWrite: true, supported: true, epub: true, items: epubNoteRows(book.id).map(epubNoteOut) });
+  // (the flip-through viewer asks for every book it can select text in; a comic has none, which is a plain "not supported", not an error)
+  if (book.format !== 'pdf') return void res.json({ canWrite: false, reason: 'Highlights and notes are only stored in PDF and EPUB files', supported: false, items: [] });
   const { abs } = pdfOf(req.params.id);
   const caps = notesCapabilities(abs, READONLY);
   try {
@@ -1320,6 +1321,67 @@ app.get('/api/books/:id/annotations', (req, res) => {
     if (e instanceof NotesError) return void res.json({ canWrite: false, reason: e.message, supported: false, items: [] });
     throw e;
   }
+});
+
+// An EPUB's highlights and notes are kept here, in the database (the book is never written to).
+interface EpubNoteRow { id: number; book_id: number; sec: number; start: number | null; end: number | null; quote: string; prefix: string | null; suffix: string | null; frac: number; color: string; note: string | null; created_at: number; updated_at: number }
+const epubNoteRows = (bookId: number) => db.prepare('SELECT * FROM epub_notes WHERE book_id = ? ORDER BY frac, id').all(bookId) as EpubNoteRow[];
+const epubNoteOut = (r: EpubNoteRow) => ({ ref: r.id, kind: 'highlight', sec: r.sec, start: r.start, end: r.end, quote: r.quote, prefix: r.prefix, suffix: r.suffix, frac: r.frac, color: r.color, note: r.note, at: r.created_at });
+const intOrNull = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < 1e9 ? v : null);
+
+app.post('/api/books/:id/annotations', async (req, res, next) => {
+  const book = getBook(req.params.id);
+  if (book.format !== 'epub') return next();
+  const quote = typeof req.body?.quote === 'string' ? req.body.quote.replace(/\s+/g, ' ').trim().slice(0, 20000) : '';
+  if (!quote) throw new HttpError(400, 'a highlight needs the text it covers');
+  let sec = intOrNull(req.body?.sec);
+  let frac = unitOrNull(req.body?.frac);
+  const st = await epubStructure(`${book.id}:${book.fingerprint}`, absPath(book)).catch(() => null);
+  const chars = st?.chars ?? [];
+  const all = chars.reduce((x, y) => x + y, 0);
+  if (sec === null) { // told only how far through the book: which section that is (the reader finds the spot from the words)
+    if (frac === null) throw new HttpError(400, 'say where: sec or frac');
+    const target = frac * all;
+    let acc = 0;
+    sec = Math.max(0, chars.length - 1);
+    for (let k = 0; k < chars.length; k++) {
+      if (target < acc + chars[k]) { sec = k; break; }
+      acc += chars[k];
+    }
+    sec = await sectionHolding(book, quote, sec).catch(() => sec as number); // (how far through the book is only close: the words say which section)
+  } else if (frac === null) {
+    frac = all > 0 && sec < chars.length ? Math.min(1, chars.slice(0, sec).reduce((x, y) => x + y, 0) / all) : 0;
+  }
+  const now = Date.now();
+  const color = cleanHex(req.body?.color);
+  const id = Number(db.prepare('INSERT INTO epub_notes (book_id, sec, start, "end", quote, prefix, suffix, frac, color, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+    .run(book.id, sec, intOrNull(req.body?.start), intOrNull(req.body?.end), quote, cleanText(req.body?.prefix, 200), cleanText(req.body?.suffix, 200), frac ?? 0, color, cleanText(req.body?.note, 20000), now, now).lastInsertRowid);
+  res.status(201).json(epubNoteOut(db.prepare('SELECT * FROM epub_notes WHERE id = ?').get(id) as EpubNoteRow));
+});
+
+app.patch('/api/books/:id/annotations/:ref', async (req, res, next) => {
+  const book = getBook(req.params.id);
+  if (book.format !== 'epub') return next();
+  const id = toInt(req.params.ref);
+  const cur = db.prepare('SELECT * FROM epub_notes WHERE id = ? AND book_id = ?').get(id, book.id) as EpubNoteRow | undefined;
+  if (!cur) throw new HttpError(404, 'highlight not found');
+  const b = req.body ?? {};
+  const note = b.note !== undefined ? cleanText(b.note, 20000) : cur.note;
+  const color = b.color !== undefined ? cleanHex(b.color) : cur.color;
+  const sec = b.sec !== undefined ? (intOrNull(b.sec) ?? cur.sec) : cur.sec;
+  const start = b.start !== undefined ? intOrNull(b.start) : cur.start;
+  const end = b.end !== undefined ? intOrNull(b.end) : cur.end;
+  const frac = b.frac !== undefined ? (unitOrNull(b.frac) ?? cur.frac) : cur.frac;
+  const moved = b.sec !== undefined || b.start !== undefined || b.end !== undefined;
+  db.prepare('UPDATE epub_notes SET note = ?, color = ?, sec = ?, start = ?, "end" = ?, frac = ?, updated_at = ? WHERE id = ?').run(note, color, sec, start, end, frac, moved && b.note === undefined && b.color === undefined ? cur.updated_at : Date.now(), id);
+  res.json(epubNoteOut(db.prepare('SELECT * FROM epub_notes WHERE id = ?').get(id) as EpubNoteRow));
+});
+
+app.delete('/api/books/:id/annotations/:ref', (req, res, next) => {
+  const book = getBook(req.params.id);
+  if (book.format !== 'epub') return next();
+  db.prepare('DELETE FROM epub_notes WHERE id = ? AND book_id = ?').run(toInt(req.params.ref), book.id);
+  res.json({ ok: true });
 });
 
 app.post('/api/books/:id/annotations', async (req, res) => {
@@ -1592,6 +1654,10 @@ app.get('/api/export', (_req, res) => {
   for (const m of db.prepare('SELECT * FROM bookmarks ORDER BY book_id, COALESCE(frac, 0), page, id').all() as BookmarkRow[]) {
     (marksOf.get(m.book_id) ?? marksOf.set(m.book_id, []).get(m.book_id)!).push({ page: m.page, ...(m.pos != null ? { pos: m.pos } : {}), ...(m.frac != null ? { frac: m.frac } : {}), ...(m.label ? { label: m.label } : {}), at: iso(m.created_at) });
   }
+  const highlightsOf = new Map<number, unknown[]>(); // an EPUB's own (a PDF's are inside the file)
+  for (const n of db.prepare('SELECT * FROM epub_notes ORDER BY book_id, frac, id').all() as EpubNoteRow[]) {
+    (highlightsOf.get(n.book_id) ?? highlightsOf.set(n.book_id, []).get(n.book_id)!).push({ quote: n.quote, ...(n.note ? { note: n.note } : {}), color: n.color, frac: n.frac, section: n.sec + 1, at: iso(n.created_at) });
+  }
   res.json({
     format: 'shelf-export',
     version: 1,
@@ -1615,6 +1681,7 @@ app.get('/api/export', (_req, res) => {
       tags: tagsOf.get(b.id) ?? [],
       lists: inLists.get(b.id) ?? [],
       bookmarks: marksOf.get(b.id) ?? [],
+      ...(highlightsOf.has(b.id) ? { highlights: highlightsOf.get(b.id) } : {}),
       progress: b.progress_page || b.progress_at ? { page: b.progress_page, ...(b.progress_pos != null ? { pos: b.progress_pos } : {}), at: iso(b.progress_at) } : null,
     })),
   });

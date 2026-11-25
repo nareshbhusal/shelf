@@ -33,7 +33,7 @@ function resolveHref(from, href) {
   return { path: dec(u.pathname.slice(1)), frag: dec(u.hash.slice(1)) };
 }
 
-export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, report, onKey, onClick, onFind, getMode }) {
+export async function epubImpl(book, { root, scroller, pagesEl, bar, setTotal, report, onKey, onClick, onFind, getMode, hooks = {} }) {
   let meta;
   try {
     meta = await api.get(`/books/${book.id}/epub`);
@@ -288,6 +288,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
       sec.ro = ro;
     } catch { /* fall back to the measurements below */ }
     measure(sec);
+    try { hooks.onFrame?.({ i: sec.i, doc, win: f.contentWindow, frame: f }); } catch (e) { console.error(e); } // (highlights and notes paint themselves)
     f.style.visibility = 'visible';
     setTimeout(() => measure(sec), 300);
     setTimeout(() => measure(sec), 1200);
@@ -314,6 +315,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
 
   function frameClick(sec, e) {
     const a = e.target.closest?.('a');
+    if (!a && hooks.onFrameClick?.(sec.i, e)) return; // a click on a highlight is the highlight's
     if (a) {
       e.preventDefault();
       const href = a.getAttribute('href');
@@ -496,6 +498,7 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
   function toggleToc(force) {
     tocOpen = force ?? !tocOpen;
     tocPanel.classList.toggle('hidden', !tocOpen);
+    hooks.onToc?.(tocOpen); // (the highlights panel sits in the same place, so it makes way)
     root.classList.toggle('has-drawer', tocOpen);
     tocBtn.classList.toggle('on', tocOpen);
     if (tocOpen) {
@@ -584,9 +587,12 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
     if (!body) return null;
     if (!sx?.regex) {
       clearMarks(body);
+      hooks.onMarked?.(sec.i);
       return null;
     }
-    return markMatches(body, sx.regex, sx.cur && sx.cur.unit === sec.i ? sx.cur.ord : -1);
+    const mk = markMatches(body, sx.regex, sx.cur && sx.cur.unit === sec.i ? sx.cur.ord : -1);
+    hooks.onMarked?.(sec.i); // (marking a hit moves the text around; highlights are drawn again)
+    return mk;
   }
   const searchSource = {
     count: N,
@@ -634,7 +640,35 @@ html body mark.srch.cur { background-color: rgba(255, 140, 0, .75) !important; o
     },
   };
 
+  /** Go to a piece of a section (a highlight): load the section, then put it a third of the way down. `target(doc)` gives the Range (or element). */
+  async function reveal(unit, target) {
+    restoring = false;
+    if (!backStack.length) pushBack();
+    const mine = ++jumpSeq;
+    const stamp = userStamp;
+    pendingIdx = unit;
+    layout();
+    setOff(tops[unit]);
+    await mount(secs[unit]);
+    if (mine !== jumpSeq || dead) return;
+    const settle = () => {
+      let rg = null;
+      try { rg = secs[unit].frame?.contentDocument ? target(secs[unit].frame.contentDocument) : null; } catch { /* not found */ }
+      layout();
+      const box = rg?.getBoundingClientRect?.();
+      if (paged) setOff(Math.max(0, offsetFor(unit, { el: rg ? { getBoundingClientRect: () => rg.getBoundingClientRect() } : null })));
+      else scroller.scrollTop = Math.max(0, tops[unit] + (box ? box.top - scroller.clientHeight * 0.3 : 0));
+    };
+    settle();
+    setTimeout(() => {
+      if (dead || mine !== jumpSeq || stamp !== userStamp) return;
+      pendingIdx = -1;
+      settle();
+    }, 350);
+  }
+
   const impl = {
+    reveal,
     searchSource,
     setWidth(px) {
       colW = px;

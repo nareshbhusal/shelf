@@ -1,6 +1,10 @@
 import { api } from './api.js';
 import { h, icon, clamp } from './util.js';
+import { toast } from './ui.js';
+const toastError = (e) => toast(e.message, 'error');
 import { COLORS, copyText, mergeLines, toastCopied } from './annotations.js';
+import { locateOnPages } from './epubnotes.js';
+import { fracOf, pageOf } from './epubpages.js';
 
 // Selecting, highlighting and noting in the flip-through viewer (PDFs). It uses the same annotations the reader does: they are written inside the PDF by the
 // server's existing routes, so nothing new is stored and other PDF programs show them too. What it adds here is small:
@@ -29,8 +33,16 @@ export function createFlipNotes({ book, pane, layer, changed }) {
   let pop = null;
   let lastColor = COLORS.some((c) => c[1] === store.get(COLOR_KEY)) ? store.get(COLOR_KEY) : COLORS[0][1];
   const base = `/books/${book.id}/annotations`;
+  // An EPUB's highlights are kept by Shelf, not in the file, and told by their words and how far through the book they are (see epubnotes.js); here they are
+  // found on the viewer's pages by those words.
+  const isEpub = book.format === 'epub';
+  const table = book.table;
+  const located = new Map(); // highlight -> where its words are on the pages
+  const shown = new Map(); // page -> promise of [{ a, rects, first }]
+  const shownVals = new Map(); // ... and the list itself, once there
+  const wordVals = new Map(); // page -> its words, once they are here
   const ready = api.get(base).then(
-    (r) => { items = r.items; canWrite = r.canWrite; reason = r.reason ?? ''; supported = r.supported; },
+    (r) => { items = r.items; canWrite = r.canWrite; reason = r.reason ?? ''; supported = r.supported; if (isEpub && !table) supported = false; },
     () => { supported = false; },
   );
 
@@ -40,6 +52,23 @@ export function createFlipNotes({ book, pane, layer, changed }) {
   function annLayer(n, ratio) {
     const box = h('div', { class: 'fa-ann' });
     if (!supported) return box;
+    if (isEpub) {
+      shownOn(n).then((list) => {
+        for (const { a, rects, first } of list) {
+          for (const [x, y, w, hh] of rects) {
+            const r = h('i', { class: 'fa-hl' });
+            Object.assign(r.style, { left: pct(x), top: pct(y), width: pct(w), height: pct(hh), background: a.color });
+            box.append(r);
+          }
+          if (a.note && first && rects[0]) {
+            const pin = h('button', { class: 'fa-pin', title: a.note, 'aria-label': 'Note', onClick: (e) => { e.stopPropagation(); showItem(a, pin.getBoundingClientRect()); } }, icon('note', 11));
+            Object.assign(pin.style, { left: pct(rects[0][0] + rects[0][2]), top: pct(rects[0][1]), background: a.color });
+            box.append(pin);
+          }
+        }
+      });
+      return box;
+    }
     const its = pageItems(n);
     const inks = its.filter((a) => a.kind === 'ink');
     if (inks.length) {
@@ -103,16 +132,48 @@ export function createFlipNotes({ book, pane, layer, changed }) {
     }
     return p;
   };
+  /** The highlights on a page of an EPUB, with the boxes of their words. */
+  function shownOn(n) {
+    let p = shown.get(n);
+    if (!p) {
+      p = (async () => {
+        const out = [];
+        for (const a of items) {
+          const home = pageOf(table, a.frac);
+          if (Math.abs(home - n) > 7) continue;
+          let loc = located.get(a.ref);
+          if (!loc) located.set(a.ref, (loc = locateOnPages(a, home, book.pages, wordsOf)));
+          const segs = await loc;
+          const seg = segs.find((x) => x.page === n);
+          if (!seg) continue;
+          const words = await wordsOf(n);
+          out.push({ a, rects: mergeLines(words.slice(seg.i0, seg.i1 + 1).map((w) => w.slice(0, 4))), first: seg === segs[0] });
+        }
+        shownVals.set(n, out);
+        return out;
+      })();
+      shown.set(n, p);
+    }
+    return p;
+  }
+  /** Pages already on show are drawn again (after a highlight was made, changed or removed). */
+  function refreshAll() {
+    shown.clear();
+    shownVals.clear();
+    for (const box of pane.querySelectorAll('.fa-page[data-n]')) refresh(Number(box.dataset.n));
+  }
+
   /** Lays the page's words, invisible, over its picture. Called for the two halves once a spread has come to rest. */
   async function attachText(half) {
     const n = Number(half.dataset.page);
     const box = half.querySelector('.fa-page');
     if (!n || !box || box.querySelector(':scope > .fa-text')) return;
     const words = await wordsOf(n);
+    wordVals.set(n, words);
     if (!words.length || !box.isConnected || box.querySelector(':scope > .fa-text')) return;
     const text = h('div', { class: 'fa-text' });
     for (const [x, y, w, hh, t] of words) {
-      const s = h('span', null, t);
+      const s = h('span', { dataset: { i: String(text.children.length) } }, t);
       s.style.cssText = `left:${pct(x)};top:${pct(y)};height:${pct(hh)};font-size:calc(${(hh * 0.8).toFixed(4)} * 100cqh)`;
       s.dataset.w = String(w);
       text.append(s, document.createTextNode(' '));
@@ -187,10 +248,24 @@ export function createFlipNotes({ book, pane, layer, changed }) {
     store.set(COLOR_KEY, color);
     getSelection()?.removeAllRanges();
     close();
+    if (isEpub) return epubWrite(() => api.post(base, { quote: info.text, prefix: info.prefix, suffix: info.suffix, frac: info.frac, color, note: note || undefined }).then((a) => { items.push(a); items.sort((x, y) => x.frac - y.frac || x.ref - y.ref); }));
     return attempt(info.page, api.post(base, { kind: 'highlight', page: info.page, color, rects: info.rects, note: note || undefined }));
   };
-  const patch = (a, body) => attempt(a.page, api.patch(`${base}/${a.ref}`, { page: a.page, ...body }));
-  const remove = (a) => attempt(a.page, api.del(`${base}/${a.ref}?page=${a.page}`));
+  const patch = (a, body) => isEpub
+    ? epubWrite(async () => { Object.assign(a, await api.patch(`${base}/${a.ref}`, body)); })
+    : attempt(a.page, api.patch(`${base}/${a.ref}`, { page: a.page, ...body }));
+  const remove = (a) => isEpub
+    ? epubWrite(async () => { await api.del(`${base}/${a.ref}`); items = items.filter((x) => x !== a); located.delete(a.ref); })
+    : attempt(a.page, api.del(`${base}/${a.ref}?page=${a.page}`));
+  async function epubWrite(fn) {
+    try {
+      await fn();
+      refreshAll();
+    } catch (e) {
+      if (pop) pop.replaceChildren(h('div', { class: 'fa-err' }, e.message));
+      else toastError(e);
+    }
+  }
 
   // ------------------------------------------------------------ a selection
   function selectionInfo() {
@@ -208,7 +283,23 @@ export function createFlipNotes({ book, pane, layer, changed }) {
       .filter((q) => q.width > 1 && q.height > 1 && !(q.width > b.width * 0.5 && q.height > b.height * 0.5))
       .map((q) => [(q.left - b.left) / b.width, (q.top - b.top) / b.height, q.width / b.width, q.height / b.height]);
     if (!raw.length) return null;
-    return { page: Number(box.dataset.n), rects: mergeLines(raw), text: r.toString().replace(/\s+/g, ' ').trim(), anchor: r.getBoundingClientRect() };
+    const out = { page: Number(box.dataset.n), rects: mergeLines(raw), text: r.toString().replace(/\s+/g, ' ').trim(), anchor: r.getBoundingClientRect() };
+    if (isEpub) {
+      // which words it covers: the words around them tell the reader where it is, and how far through the page it starts tells how far through the book
+      const words = wordVals.get(out.page) ?? [];
+      const spans = [...text.children];
+      const hit = spans.map((s, i) => (r.intersectsNode(s) ? i : -1)).filter((i) => i >= 0);
+      if (!hit.length || !words.length) return null;
+      const i0 = hit[0];
+      const around = (from, to) => words.slice(Math.max(0, from), Math.max(0, to)).map((w) => w[4]).join(' ');
+      const chars = words.reduce((acc, w) => acc + String(w[4]).length + 1, 0) || 1;
+      const before = words.slice(0, i0).reduce((acc, w) => acc + String(w[4]).length + 1, 0);
+      const next = out.page < table.total ? fracOf(table, out.page + 1) : 1;
+      out.prefix = around(i0 - 6, i0);
+      out.suffix = around(hit.at(-1) + 1, hit.at(-1) + 7);
+      out.frac = fracOf(table, out.page) + (before / chars) * Math.max(0, next - fracOf(table, out.page));
+    }
+    return out;
   }
 
   function showSelection(info) {
@@ -243,7 +334,7 @@ export function createFlipNotes({ book, pane, layer, changed }) {
   /** A click on an existing highlight or note pin: its note, its colour, and what can be done with it. */
   function showItem(a, anchor) {
     let sure = false;
-    const del = tool('trash', canWrite ? 'Remove from the PDF' : reason, () => {
+    const del = tool('trash', canWrite ? (isEpub ? 'Remove' : 'Remove from the PDF') : reason, () => {
       if (a.note && !sure) { // a note is not thrown away by one stray click
         sure = true;
         del.title = 'Click again to remove it and its note';
@@ -276,6 +367,12 @@ export function createFlipNotes({ book, pane, layer, changed }) {
     const r = box.getBoundingClientRect();
     const x = (e.clientX - r.left) / r.width;
     const y = (e.clientY - r.top) / r.height;
+    if (isEpub) {
+      const on = (shownVals.get(Number(box.dataset.n)) ?? []).find(({ rects }) => rects.some(([rx, ry, rw, rh]) => x >= rx - 0.002 && x <= rx + rw + 0.002 && y >= ry - 0.002 && y <= ry + rh + 0.002));
+      if (!on) return false;
+      showItem(on.a, { left: e.clientX, right: e.clientX, top: e.clientY, bottom: e.clientY });
+      return true;
+    }
     const hit = pageItems(Number(box.dataset.n)).find((a) => a.kind === 'highlight' && a.rects.some(([rx, ry, rw, rh]) => x >= rx - 0.002 && x <= rx + rw + 0.002 && y >= ry - 0.002 && y <= ry + rh + 0.002));
     if (!hit) return false;
     showItem(hit, { left: e.clientX, right: e.clientX, top: e.clientY, bottom: e.clientY });

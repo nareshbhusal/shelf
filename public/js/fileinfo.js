@@ -31,7 +31,7 @@ export async function openFileInfo(book, ann, { coverFromPage } = {}) {
   add('Folder', info.dir ? h('a', { href: hashFor('files', dirSegments(info.dir)), onClick: () => m.close() }, info.dir) : h('a', { href: hashFor('files', []), onClick: () => m.close() }, '(top of the library)'));
   add('Format', info.format.toUpperCase());
   add('Size', `${fmtBytes(info.size)} (${info.size.toLocaleString()} bytes)`);
-  add(info.format === 'epub' ? 'Pages (estimated)' : 'Pages', info.pages && info.format === 'epub' ? `~${info.pages}` : info.pages);
+  add('Pages', info.pages);
   add('Modified', when(info.modifiedAt));
   add('Added to Shelf', when(info.addedAt));
   add('Shown as', bookName(info));
@@ -51,6 +51,7 @@ export async function openFileInfo(book, ann, { coverFromPage } = {}) {
   if (info.format === 'pdf' && a?.supported) {
     add('Highlights, notes, drawings', `${a.count} in the file${a.canWrite ? '' : ` (can't be saved here: ${a.reason ?? 'read-only'})`}`);
   }
+  if (info.format === 'epub' && a?.supported) add('Highlights and notes', `${a.count}, kept in Shelf (not in the book file)`);
   add('Fingerprint', info.fingerprint, { mono: true });
   if (info.fileId) add('PDF ID', info.fileId, { mono: true });
 

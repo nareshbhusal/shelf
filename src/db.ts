@@ -175,6 +175,26 @@ CREATE TABLE IF NOT EXISTS bookmarks (
 );
 CREATE INDEX IF NOT EXISTS bookmarks_book ON bookmarks(book_id);
 
+-- Highlights and notes of an EPUB (a PDF keeps its own inside the file; an EPUB has no place for them, and the library is never written). A highlight is a piece of
+-- text: sec the section (0-based), start/end where it is in that section's text (null until the reader has found it), the quote itself with a little text on
+-- either side to find it again if the text moves, and frac how far through the book it starts.
+CREATE TABLE IF NOT EXISTS epub_notes (
+  id         INTEGER PRIMARY KEY,
+  book_id    INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+  sec        INTEGER NOT NULL,
+  start      INTEGER,
+  "end"      INTEGER,
+  quote      TEXT NOT NULL,
+  prefix     TEXT,
+  suffix     TEXT,
+  frac       REAL NOT NULL DEFAULT 0,
+  color      TEXT NOT NULL,
+  note       TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS epub_notes_book ON epub_notes(book_id);
+
 -- What was moved to the trash, as one entry per item that was deleted (a book, or a whole folder): the folder it went into
 -- and its original library path, so it can be put back. (The files themselves are in the library's .shelf-trash folder.)
 CREATE TABLE IF NOT EXISTS trash_items (

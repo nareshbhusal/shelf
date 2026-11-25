@@ -133,6 +133,7 @@ export async function epubPages(book: BookRow): Promise<EpubPages> {
   if (book.format !== 'epub') throw new Error('not an EPUB');
   const key = `${book.id}:${book.fingerprint}`;
   const hit = memory.get(key);
+  if (hit && hit.total > 0 && book.pages !== hit.total) db.prepare('UPDATE books SET pages = ? WHERE id = ?').run(hit.total, book.id);
   if (hit) return hit;
   let job = working.get(key);
   if (!job) {
@@ -157,9 +158,9 @@ export async function epubPages(book: BookRow): Promise<EpubPages> {
   return job;
 }
 
-/** The page count of an EPUB whose pages have been worked out before (null if not yet), without waiting for anything. */
-export function knownPages(book: BookRow): number | null {
-  const hit = memory.get(`${book.id}:${book.fingerprint}`);
+/** The page count of an EPUB whose pages have been worked out before (null if not yet), without waiting for anything. Looked up by the file's fingerprint. */
+export function knownPages(book: { fingerprint: string; id?: number }): number | null {
+  const hit = book.id != null ? memory.get(`${book.id}:${book.fingerprint}`) : undefined;
   if (hit) return hit.total;
   try {
     const saved = JSON.parse(readFileSync(fileFor(`${book.fingerprint}`), 'utf8')) as EpubPages & { v: number; layout: string };
@@ -167,4 +168,33 @@ export function knownPages(book: BookRow): number | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Make every EPUB's page count (the one on its card) the viewer's, for each book whose pages have been worked out. A scan or a metadata rebuild writes
+ * an estimate from the text length, so this runs after one; it only reads the small saved tables, and only of books that were opened.
+ */
+export function syncEpubPageCounts(): number {
+  let fixed = 0;
+  const rows = db.prepare("SELECT id, fingerprint, pages FROM books WHERE format = 'epub' AND missing = 0").all() as Array<{ id: number; fingerprint: string; pages: number | null }>;
+  const set = db.prepare('UPDATE books SET pages = ? WHERE id = ?');
+  for (const r of rows) {
+    const known = knownPages(r);
+    if (known && known !== r.pages) { set.run(known, r.id); fixed++; }
+  }
+  return fixed;
+}
+
+/** Which section holds these words: the one a position was worked out to (from how far through the book it is, which is only close) or one next to it. */
+export async function sectionHolding(book: BookRow, quote: string, guess: number): Promise<number> {
+  const abs = path.join(LIBRARY_DIR, book.path);
+  const st = await epubStructure(`${book.id}:${book.fingerprint}`, abs);
+  const q = boil(quote).slice(0, 160);
+  if (q.length < 8) return guess;
+  const tries = [guess, guess + 1, guess - 1, guess + 2, guess - 2].filter((i) => i >= 0 && i < st.spine.length && st.spine[i].kind === 'doc');
+  const found = new Map<string, boolean>();
+  const names = new Set(tries.map((i) => st.spine[i].path));
+  await readEntries(abs, names, (name, data) => { found.set(name, sectionText(data.toString('utf8')).includes(q)); }, 96 * 1024 * 1024).catch(() => {});
+  for (const i of tries) if (found.get(st.spine[i].path)) return i;
+  return guess;
 }
