@@ -76,6 +76,8 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
     if (!g || !bound()) {
       if (hd) { hd.el.remove(); held.delete(row); }
       row.style.removeProperty('--cl');
+      row.style.removeProperty('--pt');
+      row.style.removeProperty('--ph');
       return;
     }
     if (!hd) {
@@ -101,6 +103,9 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       row.style.setProperty('--ch', `${g.cover.height}px`);
       row.style.setProperty('--cw', `${g.cover.width}px`);
     } else row.style.removeProperty('--cl');
+    // the crease down the middle of a spread runs as far as the pages do, not the whole row (which is taller than the book: it would cross the cloth and reach the desk)
+    if (!g.closed) { row.style.setProperty('--pt', `${g.top - r.top}px`); row.style.setProperty('--ph', `${g.ph}px`); }
+    else { row.style.removeProperty('--pt'); row.style.removeProperty('--ph'); }
   }
   let near = [0, 0];
   let timer = 0;
@@ -228,12 +233,24 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       }
       const pane = document.createElement('div');
       pane.className = 'rflip';
+      // for finding what draws a stray line in one browser: localStorage.setItem('shelf.flipdebug', 'hair crease shade') in the console, then turn a page; each word switches that layer off
+      try { for (const k of (localStorage.getItem('shelf.flipdebug') || '').split(/\s+/).filter(Boolean)) pane.classList.add(`no-${k}`); } catch { /* no storage */ }
       Object.assign(pane.style, { left: `${snap(area.left)}px`, top: `${snap(area.top)}px`, width: `${snap(area.width)}px`, height: `${snap(area.height)}px` });
       pane.style.setProperty('--cw', `${Math.min(23, Math.max(10, area.width * 0.022))}px`); // the reader's crease is 4.4% of the window wide, split between the two pages
       // the hairline of the crease, placed and drawn as the reader draws its own (same width rule, same centre), so it stays on the same pixel when the turn ends
       const hair = Object.assign(document.createElement('div'), { className: 'rhair' });
-      hair.style.setProperty('--hw', `${Math.min(46, Math.max(20, area.width * 0.044))}px`);
-      const hairAt = (x, top, height) => Object.assign(hair.style, { left: `${x - area.left}px`, top: `${snap(top) - area.top}px`, height: `${snap(top + height) - snap(top)}px` });
+      // as wide as the reader's own crease box (a hairline drawn in a box of another width falls on other pixels)
+      let hw = Math.min(46, Math.max(20, area.width * 0.044));
+      try { const sp = rowA.matches('.spread') ? rowA : rowA.querySelector('.spread'); const w2 = sp && parseFloat(getComputedStyle(sp, '::after').width); if (w2 > 0) hw = w2; } catch { /* the formula will do */ }
+      hair.style.setProperty('--hw', `${hw}px`);
+      // The hairline stays at exactly the spot of the reader's own (x, top, height are window coordinates), whatever the pane's own offset is at that moment: while the turn
+      // runs the pane sits on whole device pixels, once it has landed on the reader's own (unrounded) place. Measured from the pane's left and top it would be off by the
+      // rounding (up to half a pixel), which Chrome smooths over but Firefox draws as a line that is a pixel to the side, or twice as thick, until the turn ends.
+      let paneL = snap(area.left);
+      let paneT = snap(area.top);
+      let hairLast = null;
+      const hairAt = (x, top, height) => { hairLast = [x, top, height]; Object.assign(hair.style, { left: `${x - paneL}px`, top: `${top - paneT}px`, height: `${height}px` }); };
+      const hairSettle = () => { paneL = area.left; paneT = area.top; if (hairLast) hairAt(...hairLast); };
       const pic = (el, side) => {
         const c = img.get(el).cloneNode();
         c.style.objectFit = 'contain';
@@ -257,7 +274,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
         const f = part('flip-face f rp', frontEl, RR, 'r');
         const b = part('flip-face b lp', backEl, LL, 'l');
         pane.append(under, f, b, hair);
-        hairAt(mid, Math.min(LL.top, RR.top), Math.max(LL.height, RR.height));
+        hairAt(mid, Math.min(LL.top, RR.top), Math.max(LL.top + LL.height, RR.top + RR.height) - Math.min(LL.top, RR.top));
         // the stacks follow the leaf: the paper moves from one side to the other as it turns (they live in the row, behind the pages)
         const ga = withBook ? geomOf(rowA, img) : null;
         const gb = withBook ? geomOf(rowB, img) : null;
@@ -266,6 +283,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
         // whichever browser it is, so the page does not shift by a pixel when the overlay goes
         settle = () => {
           Object.assign(pane.style, { left: `${area.left}px`, top: `${area.top}px`, width: `${area.width}px`, height: `${area.height}px` });
+          hairSettle();
           const put = (e, rc) => Object.assign(e.style, { left: `${rc.left - area.left}px`, top: `${rc.top - area.top}px`, width: `${rc.width}px`, height: `${rc.height}px` });
           put(under, forward ? RR : LL);
           const landed = forward ? b : f;
@@ -300,6 +318,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
         pane.append(bk, hair);
         settle = () => {
           Object.assign(pane.style, { left: `${area.left}px`, top: `${area.top}px`, width: `${area.width}px`, height: `${area.height}px` });
+          hairSettle();
           Object.assign(bk.style, { left: `${g1.spine - g1.pw - area.left}px`, top: `${g1.top - area.top}px`, width: `${g1.pw + g1.pr}px`, height: `${g1.ph}px` });
           placeDecor(decor, { pw: g1.pw, L: g1.L, R: g1.R, tail: g1.tail });
           const landed = forward ? b : f;
@@ -323,6 +342,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       // from here the overlay draws the book alone: the reader's own row for a lone cover or its spread would otherwise show where the book is no longer
       if (kind !== 'pair') hide = rowA;
       if (hide) hide.style.visibility = 'hidden';
+      if (kind === 'pair') rowA.classList.add('rflipping'); // its own hairline is left out while the pane draws one (see app.css)
       root.append(pane);
       try {
         await sweep(turnMs(Math.abs(to - from) === 1 ? 620 : 560), draw);
@@ -331,6 +351,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
         land(); // under the leaf's final picture the reader moves to the new spread
       } finally {
         if (hide) hide.style.visibility = '';
+        rowA.classList.remove('rflipping');
       }
       const t0 = performance.now();
       while (performance.now() - t0 < 600 && ![...pb].every((el) => ready(el))) await new Promise((r) => setTimeout(r, 40)); // until the reader has drawn them
