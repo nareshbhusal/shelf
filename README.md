@@ -171,6 +171,7 @@ arrow in the top bar rescans on demand (Shift-click re-reads every file's metada
   (path, when it was noticed, the tags, lists and progress Shelf still holds, and any present book that
   might be the same) and forgets them one by one or all at once, dropping their covers for good. A scan that finds nothing while the index has books is refused,
   so an unmounted drive can't wipe your tags.
+- Settings is a dialog with pages down the left (Library, Cards, Flip-through, Appearance, Reader, Programs and apps, Data and maintenance) and a search box. Anything changed from its default has a small ↺ mark that puts it back, and each page can be reset on its own. Options that only matter while another is on (the flip-through button, Space, dimming) are dimmed while it is off. A new option is one entry in `SCHEMA` in `public/js/settings.js` plus its place in `TABS`; if it isn't placed it still shows, at the end of Appearance.
 - Settings shows how much space the index and covers use.
 
 ## Using it

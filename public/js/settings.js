@@ -319,19 +319,39 @@ async function exportData() {
   }
 }
 
+// Where each option is shown in the settings dialog: a page of the dialog, and under it a sub-heading with its options (by key, in the order shown). An option that is
+// in none of these still shows (last, on Appearance), so a new entry in SCHEMA is never lost.
+const TABS = [
+  { id: 'library', name: 'Library', words: 'names titles sort order recently added folders series', parts: [
+    ['', ['nameSource', 'groupComics']],
+    ['Sorting', ['sort', 'order', 'treeSort', 'addedDays']],
+  ] },
+  { id: 'cards', name: 'Cards', words: 'covers grid list size gap badge progress ribbon shadow tilt', parts: [
+    ['Layout', ['view', 'cardWidth', 'cardGap', 'coverFit', 'coverRatio', 'titleLines']],
+    ['What a card shows', ['showAuthor', 'showFormat', 'showPages', 'showTags', 'progressStyle', 'showProgress']],
+    ['Effects', ['pageEdge', 'spineColour', 'cardTilt', 'cardShade', 'coverShadow', 'badgeBlur', 'ribbonShadow', 'cardMotion'], 'Each one draws something extra on every card. If a big library scrolls slowly, turn off what you can live without: page edges and shadows cost the most.'],
+  ] },
+  { id: 'flip', name: 'Flip-through', words: 'viewer leaf book page turn speed dim space', parts: [
+    ['', ['flipPeek', 'flipButton', 'flipSpace', 'flipDim', 'flipSpeed']],
+  ] },
+  { id: 'look', name: 'Appearance', words: 'theme dark light sepia accent colour color size sidebar', parts: [
+    ['', ['theme', 'accent', 'uiScale', 'sidebarWidth', 'sidebarOrder']],
+  ] },
+  { id: 'reader', name: 'Reader', words: 'reading mode scroll paged spread two pages width font text line spacing comic manga rtl animate flip slide', parts: [
+    ['All books', ['readerBg', 'readerProgress', 'pagedAnimation', 'spreadCover']],
+    ['PDF', ['modePdf', 'spreadPdf', 'pdfWidth', 'showFolios']],
+    ['EPUB', ['modeEpub', 'epubWidth', 'epubFontSize', 'epubLine', 'epubFont']],
+    ['Comics', ['modeComic', 'rtlComic', 'spreadComic', 'comicWidth', 'pageGap']],
+  ] },
+  { id: 'programs', name: 'Programs and apps', words: 'open with okular zathura docsessions sessions viewer external', blocks: ['programs', 'apps'] },
+  { id: 'data', name: 'Data and maintenance', words: 'trash restore backup export rescan rebuild covers missing storage reset log out', blocks: ['trash', 'backup', 'maintenance'] },
+];
+// Options that only matter while another one is on: shown dimmed (and locked) while it is off.
+const DEPENDS = { flipButton: 'flipPeek', flipSpace: 'flipPeek', flipDim: 'flipPeek' };
+let lastTab = 'library';
+
 export function openSettings() {
   const info = store.info;
-  const sections = SCHEMA.map((g) =>
-    h(
-      'section',
-      { class: 'set-group' },
-      h('h3', null, g.group),
-      g.items.filter((it) => !it.hidden).map((it) =>
-        h('div', { class: 'set-row' + (it.stacked ? ' stacked' : '') }, h('label', null, it.label), control(it)),
-      ),
-    ),
-  );
-
   const busy = (btn, fn) => async () => {
     btn.disabled = true;
     try {
@@ -402,7 +422,7 @@ export function openSettings() {
         h('br'),
         'Stored in ',
         h('code', null, s.dataDir),
-        '. Books are never copied anywhere. Your library is only read, except that highlights and notes you add are saved inside that PDF itself' + (store.info?.readOnly ? ' (disabled: read-only mode)' : '') + '.',
+        '. Books are never copied anywhere. Your library is only read, except that highlights, notes and drawings you add to a PDF are saved inside that PDF itself (those for an EPUB are kept in the Shelf database)' + (store.info?.readOnly ? ' (disabled: read-only mode)' : '') + '.',
       ),
     () => storageEl.replaceChildren('Could not read storage info.'),
   );
@@ -479,18 +499,18 @@ export function openSettings() {
     { class: 'set-group' },
     h('h3', null, 'Storage & backup'),
     storageEl,
-    h('div', { class: 'muted small' }, 'Tags, reading lists, programs and reading progress live in this database (highlights and notes live inside the PDFs themselves). Rescanning also deletes cached covers of books that no longer exist.'),
+    h('div', { class: 'muted small' }, 'Tags, reading lists, programs and reading progress live in this database (highlights and notes on PDFs live inside the PDFs themselves; those on EPUBs are here). Rescanning also deletes cached covers of books that no longer exist.'),
     h('div', { class: 'btn-row' },
       h('a', { class: 'btn', href: '/api/backup', download: '' }, 'Download backup'),
       h('button', { class: 'btn', title: 'A readable JSON file: tags, reading lists, progress, programs, display settings and the book index', onClick: exportData }, 'Export data (JSON)'),
     ),
-    h('div', { class: 'muted small' }, 'The backup is the whole database, for restoring this exact setup. The export is a readable JSON file of your tags, reading lists (in order), progress, programs, display settings and the book index. Books are identified by path and content fingerprint. Highlights, notes and drawings are not in it: they are inside the PDFs.'),
+    h('div', { class: 'muted small' }, 'The backup is the whole database, for restoring this exact setup. The export is a readable JSON file of your tags, reading lists (in order), progress, programs, display settings and the book index. Books are identified by path and content fingerprint. PDF highlights, notes and drawings are not in it: they are inside the PDFs. EPUB highlights and notes are.'),
   );
 
   const maintenance = h(
     'section',
     { class: 'set-group' },
-    h('h3', null, 'Library'),
+    h('h3', null, 'Maintenance'),
     h('div', { class: 'muted small' }, 'Folder: ', h('code', null, info?.libraryDir ?? '…')),
     warn,
     h('div', { class: 'btn-row' }, rescanBtn, rebuildBtn, coversBtn, purgeBtn),
@@ -502,5 +522,101 @@ export function openSettings() {
       : null,
   );
 
-  const m = modal({ title: 'Display & settings', body: [...sections, programs, apps, trash, backup, maintenance], wide: true });
+  // ---- the dialog: pages on the left (and a search), the chosen page on the right
+  const items = new Map(SCHEMA.flatMap((g) => g.items).filter((it) => !it.hidden).map((it) => [it.key, it]));
+  const placed = new Set(TABS.flatMap((t) => (t.parts ?? []).flatMap((p) => p[1])));
+  const look = TABS.find((t) => t.id === 'look');
+  for (const k of items.keys()) if (!placed.has(k)) look.parts.push(['More', [k]]);
+  const same = (it) => String(settings[it.key]) === String(it.default);
+
+  const rows = new Map(); // key -> { el, refresh, it }
+  for (const [key, it] of items) {
+    const mark = h('button', { class: 'set-reset', type: 'button', title: 'Back to the default', 'aria-label': `Reset “${it.label}” to its default` }, '↺');
+    const slot = h('div', { class: 'set-ctl' }, control(it));
+    const el = h('div', { class: 'set-row' + (it.stacked ? ' stacked' : '') }, h('div', { class: 'set-lab' }, h('label', null, it.label), mark), slot);
+    const refresh = () => {
+      mark.style.visibility = same(it) ? 'hidden' : 'visible';
+      const off = DEPENDS[key] && !settings[DEPENDS[key]];
+      el.classList.toggle('off', !!off);
+      slot.inert = !!off;
+    };
+    mark.onclick = () => { setSetting(key, it.default); slot.replaceChildren(control(it)); refreshAll(); };
+    rows.set(key, { el, refresh, it });
+  }
+  const blocks = { programs, apps, trash, backup, maintenance };
+
+  const pane = h('div', { class: 'set-pane' });
+  const find = h('input', { type: 'search', class: 'set-find', placeholder: 'Search settings', 'aria-label': 'Search settings' });
+  const tabBtns = new Map();
+  const side = h('nav', { class: 'set-side', 'aria-label': 'Settings pages' }, find);
+  for (const t of TABS) {
+    const b = h('button', { class: 'set-tab', type: 'button', onClick: () => showTab(t.id) }, t.name);
+    tabBtns.set(t.id, b);
+    side.append(b);
+  }
+  let resetTab = null;
+  function refreshAll() {
+    for (const r of rows.values()) r.refresh();
+    const t = TABS.find((x) => x.id === lastTab);
+    if (resetTab && t?.parts) resetTab.style.visibility = t.parts.some((p) => p[1].some((k) => !same(items.get(k)))) ? 'visible' : 'hidden';
+  }
+  function showTab(id) {
+    lastTab = id;
+    find.value = '';
+    const t = TABS.find((x) => x.id === id) ?? TABS[0];
+    for (const [k, b] of tabBtns) b.setAttribute('aria-selected', String(k === t.id));
+    resetTab = null;
+    const head = h('div', { class: 'set-head' }, h('h3', { class: 'set-title' }, t.name));
+    if (t.parts) {
+      resetTab = h('button', { class: 'btn small', type: 'button', style: { visibility: 'hidden' }, title: 'Put every option on this page back to its default', onClick: () => {
+        for (const p of t.parts) for (const k of p[1]) { const r = rows.get(k); setSetting(k, r.it.default); r.el.querySelector('.set-ctl').replaceChildren(control(r.it)); }
+        refreshAll();
+      } }, 'Reset this page');
+      head.append(resetTab);
+    }
+    pane.replaceChildren(
+      head,
+      ...(t.parts ?? []).flatMap(([sub, keys, note]) => [
+        sub ? h('h4', { class: 'set-sub' }, sub) : null,
+        note ? h('div', { class: 'muted small set-note' }, note) : null,
+        ...keys.map((k) => rows.get(k).el),
+      ]).filter(Boolean),
+      ...(t.blocks ?? []).map((b) => blocks[b]),
+    );
+    pane.scrollTop = 0;
+    refreshAll();
+  }
+  function showFound(query) {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    for (const b of tabBtns.values()) b.setAttribute('aria-selected', 'false');
+    resetTab = null;
+    const out = [h('div', { class: 'set-head' }, h('h3', { class: 'set-title' }, 'Search results'))];
+    let n = 0;
+    for (const t of TABS) {
+      for (const [sub, keys] of t.parts ?? []) {
+        for (const k of keys) {
+          const r = rows.get(k);
+          const hay = `${r.it.label} ${k} ${t.name} ${sub}`.toLowerCase();
+          if (!words.every((w) => hay.includes(w))) continue;
+          out.push(h('div', { class: 'set-where muted small' }, [t.name, sub].filter(Boolean).join(' · ')), r.el);
+          n++;
+        }
+      }
+      if (t.blocks && words.every((w) => `${t.name} ${t.words}`.toLowerCase().includes(w))) {
+        out.push(h('div', { class: 'set-where muted small' }, t.name), h('button', { class: 'btn', type: 'button', onClick: () => showTab(t.id) }, `Open “${t.name}”`));
+        n++;
+      }
+    }
+    if (!n) out.push(h('div', { class: 'muted', style: { marginTop: '14px' } }, 'Nothing matches that. Try a shorter word, such as “speed”, “font” or “trash”.'));
+    pane.replaceChildren(...out);
+    pane.scrollTop = 0;
+    refreshAll();
+  }
+  find.addEventListener('input', () => (find.value.trim() ? showFound(find.value) : showTab(lastTab)));
+  // any change to an option (a control, its reset mark, the sidebar-order arrows) updates the marks and the options that depend on it
+  for (const ev of ['change', 'input', 'click']) pane.addEventListener(ev, () => setTimeout(refreshAll, 0));
+
+  const m = modal({ title: 'Display & settings', body: [h('div', { class: 'set-wrap' }, side, pane)], wide: true });
+  m.el.classList.add('settings-dlg');
+  showTab(lastTab);
 }

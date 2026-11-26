@@ -48,7 +48,7 @@ const standInFonts = new Map<string, mupdf.Font>();
 const STAND_IN_SCRIPTS = new Set(['Latin', 'Greek', 'Cyrillic', 'Common', 'Inherited']);
 // mupdf reports everything it dislikes in a book (a stylesheet it can't parse, a font or picture that isn't in the file, a rule it doesn't know) on the console,
 // again for every page it lays out. None of it stops anything: leave it out, except what is new and not of that kind, once. SHELF_DEBUG_MUPDF=1 shows it all.
-const NOISE = /css syntax error|cannot load font-face|cannot locate font|FT_New_Memory_Face|cannot load image|ignoring stylesheet|cannot find entry|may be locked by DRM|unknown epub version|stale accelerator|repeated \d+ times|cannot find font|no glyph|not inside (?:table|table-row|table-group) element|unsupported (?:css|font|image)/i;
+const NOISE = /css syntax error|cannot load font-face|cannot locate font|FT_New_Memory_Face|cannot load image|ignoring stylesheet|cannot find entry|may be locked by DRM|unknown epub version|stale accelerator|repeated \d+ times|cannot find font|no glyph|not inside (?:table|table-row|table-group) element|expected name after \w+ in cmap|jbig2dec warning|unsupported (?:css|font|image)/i;
 const seenLog = new Set<string>();
 mupdf.setLog((message: string) => {
   const m = String(message).trim();
