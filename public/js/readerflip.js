@@ -137,7 +137,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       img.src = url;
       p = img.decode().then(() => img, () => null);
       pics.set(url, p);
-      if (pics.size > 16) pics.delete(pics.keys().next().value);
+      if (pics.size > 24) pics.delete(pics.keys().next().value);
     }
     return p;
   };
@@ -148,7 +148,7 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
   function warm(i, count) {
     const rs = rows();
     if (rs.length !== count) return;
-    for (const j of [i, i + 1, i - 1]) for (const el of pagesOf(rs[j])) { const u = urlOf(el); if (u) load(u); }
+    for (const j of [i, i + 1, i - 1, i + 2, i - 2]) for (const el of pagesOf(rs[j])) { const u = urlOf(el); if (u) load(u); }
   }
 
   const ready = (el) => (el.tagName === 'IMG' ? el.complete && el.naturalWidth > 0 : !!el.querySelector('canvas'));
@@ -220,7 +220,8 @@ export function createReaderFlip({ root, pagesEl, scroller, peekUrl, total, boun
       const wanted = [frontEl, backEl, underEl, restEl].filter(Boolean);
       const urls = wanted.map(urlOf);
       if (urls.some((u) => !u)) return false;
-      const got = await within(Promise.all(urls.map(load)), 400);
+      // A picture the server is still drawing keeps loading in the background: wait for it rather than slide (a turn made right after another asks for pages that were only just requested)
+      const got = await within(Promise.all(urls.map(load)), 1500);
       if (!got || got.some((g) => !g)) return false;
       const img = new Map(wanted.map((el, k) => [el, got[k]]));
       if (kind !== 'pair') {

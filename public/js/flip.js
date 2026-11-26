@@ -77,7 +77,7 @@ function openBook(wrap, book, { open, saved }) {
       img.src = url(n);
       p = img.decode().then(() => img, () => null);
       pics.set(n, p);
-      if (pics.size > 24) pics.delete(pics.keys().next().value);
+      if (pics.size > 32) pics.delete(pics.keys().next().value);
     }
     return p;
   };
@@ -317,7 +317,7 @@ function openBook(wrap, book, { open, saved }) {
       running = false;
     }
     if (notes && pane.isConnected && pos > 0 && !leaving) { notes.attachText(halfL); notes.attachText(halfR); } // at rest: the words can be selected
-    for (const s of [pos + 1, pos + 2, pos - 1]) { load(leftOf(s)); load(rightOf(s)); } // the pages most likely next
+    for (const s of [pos + 1, pos + 2, pos - 1, pos + 3, pos - 2]) { load(leftOf(s)); load(rightOf(s)); } // the pages most likely next
   }
   const goSpread = (s) => {
     if (leaving) return;
