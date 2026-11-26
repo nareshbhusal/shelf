@@ -17,8 +17,8 @@ import { fracOf, loadEpubPages, pageOf } from './epubpages.js';
 const PDFJS = '/vendor/pdfjs';
 let pdfjsPromise = null;
 function loadPdfjs() {
-  pdfjsPromise ??= import(`${PDFJS}/build/pdf.min.mjs`).then((m) => {
-    m.GlobalWorkerOptions.workerSrc = `${PDFJS}/build/pdf.worker.min.mjs`;
+  pdfjsPromise ??= import('./polyfill.js').then(() => import(`${PDFJS}/build/pdf.min.mjs`)).then((m) => {
+    m.GlobalWorkerOptions.workerSrc = '/js/pdfworker.js'; // pdf.js's worker with the missing Map methods added first
     return m;
   });
   return pdfjsPromise;
