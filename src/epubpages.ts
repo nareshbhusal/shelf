@@ -4,7 +4,7 @@ import { EPUB_PAGES_DIR, LIBRARY_DIR } from './config.js';
 import { db, type BookRow } from './db.js';
 import { readFileSync } from 'node:fs';
 import { epubStructure } from './epub.js';
-import { EPUB_PAGE, peekAllText } from './peek.js';
+import { EPUB_PAGE, peekAllText, peekPages } from './peek.js';
 import { readEntries } from './zip.js';
 
 /**
@@ -26,10 +26,13 @@ export interface EpubPages {
   total: number;
   /** For each page, the fraction (0..1) of the book at its top, in the reader's units. Never decreasing. */
   starts: number[];
+  /** The exact table could not be worked out (the book laid out differently from one moment to the next): pages are spread evenly, so the totals agree but the spots are rough. */
+  approx?: boolean;
 }
 
 const VERSION = 1;
 const memory = new Map<string, EpubPages>();
+const approxAt = new Map<string, number>();
 const working = new Map<string, Promise<EpubPages>>();
 
 const NAMED: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', shy: '', ndash: '–', mdash: '—', hellip: '…', lsquo: '‘', rsquo: '’', ldquo: '“', rdquo: '”', eacute: 'é', egrave: 'è', agrave: 'à', aacute: 'á', iacute: 'í', oacute: 'ó', uacute: 'ú', ccedil: 'ç', ntilde: 'ñ', uuml: 'ü', ouml: 'ö', auml: 'ä', szlig: 'ß' };
@@ -132,7 +135,8 @@ async function compute(book: BookRow, key: string): Promise<EpubPages> {
 export async function epubPages(book: BookRow): Promise<EpubPages> {
   if (book.format !== 'epub') throw new Error('not an EPUB');
   const key = `${book.id}:${book.fingerprint}`;
-  const hit = memory.get(key);
+  let hit = memory.get(key);
+  if (hit?.approx && Date.now() - (approxAt.get(key) ?? 0) > 10 * 60_000) { memory.delete(key); hit = undefined; } // (try for the real one again after a while)
   if (hit && hit.total > 0 && book.pages !== hit.total) db.prepare('UPDATE books SET pages = ? WHERE id = ?').run(hit.total, book.id);
   if (hit) return hit;
   let job = working.get(key);
@@ -143,7 +147,15 @@ export async function epubPages(book: BookRow): Promise<EpubPages> {
         const saved = JSON.parse(await fs.readFile(file, 'utf8')) as EpubPages & { v: number; layout: string };
         if (saved.v === VERSION && saved.layout === JSON.stringify(EPUB_PAGE) && Array.isArray(saved.starts) && saved.starts.length === saved.total) return { total: saved.total, starts: saved.starts };
       } catch { /* not worked out yet */ }
-      const t = await compute(book, key);
+      let t: EpubPages;
+      try {
+        t = await compute(book, key);
+      } catch (e) {
+        console.warn(`[shelf] could not work out exact pages for "${book.title}": ${(e as Error).message}`);
+        const total = await peekPages(book);
+        approxAt.set(key, Date.now());
+        return { total, starts: Array.from({ length: total }, (_, i) => i / total), approx: true };
+      }
       await fs.writeFile(file, JSON.stringify({ v: VERSION, layout: JSON.stringify(EPUB_PAGE), ...t })).catch(() => {});
       return t;
     })().then((t) => {

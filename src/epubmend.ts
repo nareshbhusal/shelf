@@ -14,6 +14,9 @@ import { listEntries, readEntries, readEntry } from './zip.js';
  * Fonts are the other thing: a book's own fonts are very often "obfuscated" (the first kilobyte scrambled with a key made from the book's identifier; a publisher's
  * way of keeping them from being lifted, listed in META-INF/encryption.xml). Readers undo that, mupdf doesn't, so the page falls back to its built-in font, which
  * has none of the letters of a transliterated Sanskrit or Pali text (ṇ ṣ ḥ ṃ ...), and they show as empty boxes. The scrambling is undone here, in the copy.
+ * Smaller things in the same copy: a reference to a file that is there under another capitalisation (`Styles/0001.css` for `styles/0001.css`; a browser's reader
+ * is not as strict as a zip), a stylesheet missing the `;` between two declarations, `epub:type` rules (mupdf has no namespaced attribute selectors, so a book's
+ * "hide the page-list nav" is turned into a class rule), a font that is really a WOFF.
  * This makes a corrected copy of the book in memory for it (the file in the library is never touched): the SVG wrapper becomes a plain <img>, odd formats become PNG
  * (and are made smaller, as they're only drawn for a page), root paths become relative. Returns null when nothing needed changing, so the file itself is used.
  */
@@ -24,8 +27,44 @@ const MAX_BYTES = 120 * 1024 * 1024;
 /** A page of a book can be a whole volume (an "all volumes" EPUB has files of tens of megabytes), so the limit for reading one is high. */
 const MAX_HTML = 96 * 1024 * 1024;
 
+/** What mending a page needs to know about the rest of the book. */
+interface Ctx {
+  /** lower-case path -> the path as it is in the book (for references that differ only in capitals). */
+  lower?: Map<string, string>;
+  names?: Set<string>;
+  /** a stylesheet of the book selects on epub:type, so those elements get a class that the (rewritten) rule can select. */
+  epubType?: boolean;
+}
+
+/** A reference from the file `entry` to another file in the book, put right when it names a file that is there under other capitals or percent-encoding. */
+function fixRef(entry: string, ref: string, ctx: Ctx): string {
+  if (!ctx.names || !ctx.lower || !ref || ref.startsWith('#') || /^[a-z][a-z0-9+.-]*:/i.test(ref) || ref.startsWith('//')) return ref;
+  const m = /^([^#?]*)([#?][\s\S]*)?$/.exec(ref);
+  if (!m || !m[1]) return ref;
+  const dir = path.posix.dirname(entry);
+  let decoded = m[1];
+  try { decoded = decodeURIComponent(decoded); } catch { /* as written */ }
+  const target = path.posix.normalize(decoded.startsWith('/') ? decoded.slice(1) : path.posix.join(dir, decoded));
+  if (ctx.names.has(target)) return ref;
+  const actual = ctx.lower.get(target.toLowerCase());
+  if (!actual) return ref;
+  return path.posix.relative(dir, actual).split('/').map(encodeURIComponent).join('/') + (m[2] ?? '');
+}
+
+/** The text of a stylesheet with the things mupdf chokes on put right; the same text when there is nothing to do. */
+export function mendCss(entry: string, css: string, ctx: Ctx = {}): string {
+  let out = css;
+  // two declarations run together (`text-indent: -1em  line-height: 1.4em;`): a browser drops the first; mupdf drops the rule. Put the missing ; in.
+  out = out.replace(/([^;{}\s,(])([ \t\r\n]+)((?:margin|padding|line-height|text-indent|text-align|font(?:-[a-z]+)?|color|background(?:-[a-z]+)?|border(?:-[a-z]+)*|display|width|height|float|clear|page-break-[a-z]+|text-decoration|vertical-align|white-space)[ \t]*:)/gi, (all, a: string, ws: string, prop: string) => (/[{;]\s*$/.test(a) ? all : `${a};${ws}${prop}`));
+  // epub:type selectors: no namespaced attributes in mupdf, so they become classes (the elements get them, see mendHtml)
+  out = out.replace(/\[\s*epub(?:\\?:|\|)type\s*(~?=)\s*(?:"([^"]*)"|'([^']*)'|([\w-]+))\s*\]/gi, (_all, _op: string, a?: string, b?: string, c?: string) => `.epubtype-${(a ?? b ?? c ?? '').trim()}`);
+  // urls (fonts, images) that name a file by other capitals
+  if (ctx.names) out = out.replace(/url\(\s*(["']?)([^)"']+)\1\s*\)/gi, (all, q: string, ref: string) => { const f = fixRef(entry, ref.trim(), ctx); return f === ref.trim() ? all : `url(${q}${f}${q})`; });
+  return out;
+}
+
 /** The text of a page with those three things put right; the same text when there is nothing to do. */
-export function mendHtml(entry: string, html: string): string {
+export function mendHtml(entry: string, html: string, ctx: Ctx = {}): string {
   const dir = path.posix.dirname(entry);
   const relative = (href: string) => (/^\/(?!\/)/.test(href) ? path.posix.relative(dir, href.slice(1)) || href : href);
   const attr = /(\b(?:src|(?:xlink:)?href)\s*=\s*)(["'])([^"']*)\2/i;
@@ -38,6 +77,18 @@ export function mendHtml(entry: string, html: string): string {
   });
   // a path from the root of the book, made relative to this page
   out = out.replace(/<img\b[^>]*>/gi, (tag) => tag.replace(attr, (_, pre: string, q: string, href: string) => `${pre}${q}${relative(href)}${q}`));
+  // pictures and stylesheets named by other capitals
+  if (ctx.names) {
+    out = out.replace(/<(?:img|link)\b[^>]*>/gi, (tag) => tag.replace(/(\b(?:src|href)\s*=\s*)(["'])([^"']*)\2/i, (_, pre: string, q: string, href: string) => `${pre}${q}${fixRef(entry, href, ctx)}${q}`));
+  }
+  // epub:type="pagebreak" -> also class="epubtype-pagebreak", for the rules mendCss made
+  if (ctx.epubType) {
+    out = out.replace(/<([a-zA-Z][\w:-]*)(\s[^>]*?)\bepub:type\s*=\s*(["'])([^"']*)\3([^>]*)>/g, (all, tag: string, before: string, _q: string, types: string, after: string) => {
+      const cls = types.split(/\s+/).filter(Boolean).map((t) => `epubtype-${t}`).join(' ');
+      const rest = `${before}epub:type="${types}"${after}`;
+      return /\bclass\s*=\s*(["'])/i.test(rest) ? `<${tag}${rest.replace(/\bclass\s*=\s*(["'])/i, (_m, q: string) => `class=${q}${cls} `)}>` : `<${tag}${rest} class="${cls}">`;
+    });
+  }
   return out;
 }
 
@@ -74,23 +125,80 @@ const xor = (data: Buffer, key: Buffer, n: number) => {
 };
 const readSmall = (abs: string, name: string) => readEntry(abs, name, 4 * 1024 * 1024).then((b) => b.toString('utf8')).catch(() => null);
 
-/** The two keys a book's fonts can be scrambled with, made from the identifier the package names as its unique one. */
-async function fontKeys(abs: string): Promise<{ idpf: Buffer | null; adobe: Buffer | null }> {
-  const none = { idpf: null, adobe: null };
+const isFont = (b: Buffer) => b.length > 12 && (b.readUInt32BE(0) === 0x00010000 || ['OTTO', 'true', 'ttcf', 'typ1'].includes(b.toString('latin1', 0, 4)));
+
+/** A WOFF (1) font as the plain TrueType/OpenType file mupdf can read; null if it isn't one. */
+export function woffToSfnt(b: Buffer): Buffer | null {
+  if (b.length < 44 || b.toString('latin1', 0, 4) !== 'wOFF') return null;
+  try {
+    const flavor = b.readUInt32BE(4);
+    const n = b.readUInt16BE(12);
+    const tables: Array<{ tag: Buffer; data: Buffer; sum: number }> = [];
+    for (let i = 0; i < n; i++) {
+      const e = 44 + i * 20;
+      const off = b.readUInt32BE(e + 4);
+      const comp = b.readUInt32BE(e + 8);
+      const orig = b.readUInt32BE(e + 12);
+      const raw = b.subarray(off, off + comp);
+      tables.push({ tag: b.subarray(e, e + 4), data: comp < orig ? zlib.inflateSync(raw) : raw, sum: b.readUInt32BE(e + 16) });
+    }
+    const head = Buffer.alloc(12 + 16 * n);
+    head.writeUInt32BE(flavor, 0);
+    head.writeUInt16BE(n, 4);
+    const pow = 2 ** Math.floor(Math.log2(Math.max(1, n)));
+    head.writeUInt16BE(pow * 16, 6);
+    head.writeUInt16BE(Math.log2(pow), 8);
+    head.writeUInt16BE(n * 16 - pow * 16, 10);
+    let at = head.length;
+    const bodies: Buffer[] = [];
+    tables.forEach((t, i) => {
+      const d = 12 + i * 16;
+      t.tag.copy(head, d);
+      head.writeUInt32BE(t.sum, d + 4);
+      head.writeUInt32BE(at, d + 8);
+      head.writeUInt32BE(t.data.length, d + 12);
+      const pad = (4 - (t.data.length % 4)) % 4;
+      bodies.push(t.data, Buffer.alloc(pad));
+      at += t.data.length + pad;
+    });
+    return Buffer.concat([head, ...bodies]);
+  } catch {
+    return null;
+  }
+}
+
+/** The keys a book's fonts can be scrambled with, made from the identifier the package names as its unique one (that one first; the others as a second chance). */
+async function fontKeys(abs: string): Promise<{ idpf: Buffer[]; adobe: Buffer[] }> {
+  const none = { idpf: [], adobe: [] };
   const container = await readSmall(abs, 'META-INF/container.xml');
   const opfPath = container && /full-path\s*=\s*["']([^"']+)["']/i.exec(container)?.[1];
   const opf = opfPath ? await readSmall(abs, opfPath) : null;
   if (!opf) return none;
   const ref = /<package\b[^>]*\bunique-identifier\s*=\s*["']([^"']+)["']/i.exec(opf)?.[1];
   const ids = [...opf.matchAll(/<(?:\w+:)?identifier\b([^>]*)>([\s\S]*?)<\/(?:\w+:)?identifier>/gi)];
-  const pick = ids.find((m) => ref && new RegExp(`\\bid\\s*=\\s*["']${ref}["']`).test(m[1])) ?? ids[0];
-  if (!pick) return none;
-  const uid = pick[2].replace(/&amp;/g, '&');
-  const hex = uid.replace(/^\s*urn:uuid:/i, '').replace(/[-\s]/g, '');
-  return {
-    idpf: crypto.createHash('sha1').update(uid.replace(/[ \t\r\n]/g, ''), 'utf8').digest(),
-    adobe: /^[0-9a-f]{32}$/i.test(hex) ? Buffer.from(hex, 'hex') : null,
-  };
+  const pick = ids.find((m) => ref && new RegExp(`\\bid\\s*=\\s*["']${ref}["']`).test(m[1]));
+  const order = [...(pick ? [pick] : []), ...ids.filter((m) => m !== pick)];
+  const out: { idpf: Buffer[]; adobe: Buffer[] } = { idpf: [], adobe: [] };
+  for (const m of order) {
+    const uid = m[2].replace(/&amp;/g, '&');
+    const hex = uid.replace(/^\s*urn:uuid:/i, '').replace(/[-\s]/g, '');
+    out.idpf.push(crypto.createHash('sha1').update(uid.replace(/[ \t\r\n]/g, ''), 'utf8').digest());
+    if (/^[0-9a-f]{32}$/i.test(hex)) out.adobe.push(Buffer.from(hex, 'hex'));
+  }
+  return out;
+}
+
+/** The font a scrambled file really holds: tried with the package's key, then every other key the book could have (and not at all if it is already a font). */
+function descramble(data: Buffer, alg: string, keys: { idpf: Buffer[]; adobe: Buffer[] }): Buffer | null {
+  if (isFont(data)) return data; // listed as scrambled but isn't (it happens)
+  const tries: Array<[Buffer, number]> = alg === IDPF
+    ? [...keys.idpf.map((k) => [k, 1040] as [Buffer, number]), ...keys.adobe.map((k) => [k, 1024] as [Buffer, number])]
+    : [...keys.adobe.map((k) => [k, 1024] as [Buffer, number]), ...keys.idpf.map((k) => [k, 1040] as [Buffer, number])];
+  for (const [k, n] of tries) {
+    const out = xor(data, k, n);
+    if (isFont(out) || woffToSfnt(out)) return woffToSfnt(out) ?? out;
+  }
+  return null;
 }
 
 /** Unscrambles the fonts listed in encryption.xml. Returns the new contents of those files, and of encryption.xml (null: it has nothing left in it, drop it). */
@@ -105,7 +213,7 @@ async function unscrambleFonts(abs: string, entries: Array<{ name: string }>): P
   for (const m of blocks) {
     const alg = /Algorithm\s*=\s*["']([^"']+)["']/i.exec(m[0])?.[1] ?? '';
     const uri = /<(?:\w+:)?CipherReference\b[^>]*\bURI\s*=\s*["']([^"']+)["']/i.exec(m[0])?.[1];
-    if (!uri || !((alg === IDPF && keys.idpf) || (alg === ADOBE && keys.adobe))) continue; // anything else is real protection: left as it is
+    if (!uri || !((alg === IDPF && keys.idpf.length) || (alg === ADOBE && keys.adobe.length))) continue; // anything else is real protection: left as it is
     let name = uri.replace(/^\/+/, '');
     try { name = decodeURIComponent(name); } catch { /* as written */ }
     if (names.has(name)) todo.push({ block: m[0], name, alg });
@@ -114,7 +222,8 @@ async function unscrambleFonts(abs: string, entries: Array<{ name: string }>): P
   const files = new Map<string, Buffer>();
   const algOf = new Map(todo.map((t) => [t.name, t.alg]));
   await readEntries(abs, new Set(todo.map((t) => t.name)), (name, data) => {
-    files.set(name, algOf.get(name) === IDPF ? xor(data, keys.idpf!, 1040) : xor(data, keys.adobe!, 1024));
+    const font = descramble(data, algOf.get(name)!, keys);
+    if (font) files.set(name, font);
   }, 16 * 1024 * 1024);
   let rest = xml;
   for (const t of todo) if (files.has(t.name)) rest = rest.replace(t.block, '');
@@ -164,10 +273,21 @@ export async function mendedEpub(abs: string): Promise<Mended> {
   let needsFont = false;
   const faces = await fallbackFaces().catch(() => null); // the stand-in letters' font, which goes into the copy
   let usedFaces = false;
+  const names = new Set(entries.map((e) => e.name));
+  const ctx: Ctx = { names, lower: new Map(entries.map((e) => [e.name.toLowerCase(), e.name])) };
+  // stylesheets first (what the pages need to know about them comes from here)
+  const css = entries.filter((e) => /\.css$/i.test(e.name) && e.size <= 8 * 1024 * 1024);
+  const cssText = new Map<string, string>();
+  await readEntries(abs, new Set(css.map((e) => e.name)), (name, data) => { cssText.set(name, data.toString('utf8')); }, 8 * 1024 * 1024);
+  for (const [name, text] of cssText) {
+    if (/\[\s*epub(?:\\?:|\|)type/i.test(text)) ctx.epubType = true;
+    const fixed = mendCss(name, text, ctx);
+    if (fixed !== text) changed.set(name, Buffer.from(fixed, 'utf8'));
+  }
   await readEntries(abs, new Set(html.map((e) => e.name)), (name, data) => {
     const text = data.toString('utf8');
     if (!needsFont && NEEDS_FONT.test(text)) needsFont = true;
-    let fixed = mendHtml(name, text);
+    let fixed = mendHtml(name, text, ctx);
     if (faces) fixed = wrapSpecial(name, fixed);
     if (fixed !== text) changed.set(name, Buffer.from(fixed, 'utf8'));
     if (faces && fixed.includes('font-family:ShelfFB')) usedFaces = true;
@@ -177,6 +297,14 @@ export async function mendedEpub(abs: string): Promise<Mended> {
     for (const [n, d] of fonts.files) changed.set(n, d);
     if (fonts.encryption === null) removed.add(ENC);
     else changed.set(ENC, Buffer.from(fonts.encryption, 'utf8'));
+  }
+  // a font that is a WOFF (mupdf only reads plain TrueType/OpenType)
+  const woffs = entries.filter((e) => /\.(woff|ttf|otf)$/i.test(e.name) && !changed.has(e.name) && e.size <= 16 * 1024 * 1024);
+  if (woffs.length) {
+    await readEntries(abs, new Set(woffs.map((e) => e.name)), (name, data) => {
+      const sfnt = woffToSfnt(data);
+      if (sfnt) changed.set(name, sfnt);
+    }, 16 * 1024 * 1024);
   }
   if (odd.length) {
     for (const e of odd.slice(0, 300)) { // one at a time, so they aren't all held in memory at once

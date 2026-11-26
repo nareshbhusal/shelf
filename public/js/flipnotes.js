@@ -42,7 +42,7 @@ export function createFlipNotes({ book, pane, layer, changed }) {
   const shownVals = new Map(); // ... and the list itself, once there
   const wordVals = new Map(); // page -> its words, once they are here
   const ready = api.get(base).then(
-    (r) => { items = r.items; canWrite = r.canWrite; reason = r.reason ?? ''; supported = r.supported; if (isEpub && !table) supported = false; },
+    (r) => { items = r.items; canWrite = r.canWrite; reason = r.reason ?? ''; supported = r.supported; if (isEpub && !table?.exact) supported = false; },
     () => { supported = false; },
   );
 

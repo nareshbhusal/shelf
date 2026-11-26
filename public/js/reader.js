@@ -101,12 +101,12 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
   const pageTotal = h('span', { class: 'muted' }, total ? `/ ${total}` : '');
   /** EPUB: the page the reader is on. These are the flip-through viewer's pages (once the table is here; until then an estimate, about 1800 characters a page). */
   const estPage = () => (pageTable ? pageOf(pageTable, bookFraction()) : clamp(Math.ceil(bookFraction() * estPages), 1, Math.max(1, estPages)));
-  const tilde = () => (pageTable ? '' : '~');
+  const tilde = () => (pageTable?.exact ? '' : '~');
   function epubBox() {
     if (!isEpub) return;
     pageBox.classList.toggle('hidden', !estPages);
     pageTotal.textContent = estPages ? `/ ${tilde()}${estPages}` : '';
-    pageTotal.title = pageTable ? 'Pages, as the flip-through shows them' : 'Estimated pages, about 1800 characters each';
+    pageTotal.title = pageTable?.exact ? 'Pages, as the flip-through shows them' : pageTable ? 'Pages, as the flip-through counts them (where each starts is only roughly known for this book)' : 'Estimated pages, about 1800 characters each';
     if (document.activeElement !== pageInput) pageInput.value = String(estPage());
   }
   // Bookmarks: any number, kept by Shelf. An EPUB's are told by section, spot and how far through the book (see bookFraction).
@@ -691,7 +691,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
         });
         // the viewer's page table, in the background: from then on the pages shown here are the viewer's (exactly, no longer an estimate)
         loadEpubPages(book).then((t) => {
-          if (!t.exact || dead) return;
+          if (!t.shared || dead) return;
           pageTable = t;
           estPages = t.total;
           epubBox();

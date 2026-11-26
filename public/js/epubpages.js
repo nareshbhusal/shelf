@@ -5,18 +5,18 @@ import { api } from './api.js';
 
 const cache = new Map(); // book id -> promise of { total, starts, exact }
 
-/** The table for a book: { total, starts[], exact }. If the server can't make it, pages are spread evenly (exact: false). */
+/** The table for a book: { total, starts[], exact, shared }; shared: it is the server's table (the viewer's count), exact: and the spots are exact too. If the server can't make it, pages are spread evenly (exact: false). */
 export function loadEpubPages(book) {
   const key = `${book.id}:${book.fingerprint ?? ''}`;
   let p = cache.get(key);
   if (!p) {
     p = api
       .get(`/books/${book.id}/epub-pages`)
-      .then((t) => (t && Array.isArray(t.starts) && t.starts.length ? { total: t.starts.length, starts: t.starts, exact: true } : Promise.reject(new Error('empty'))))
+      .then((t) => (t && Array.isArray(t.starts) && t.starts.length ? { total: t.starts.length, starts: t.starts, exact: !t.approx, shared: true } : Promise.reject(new Error('empty'))))
       .catch(() => {
         cache.delete(key);
         const total = Math.max(1, book.pages || 1);
-        return { total, starts: Array.from({ length: total }, (_, i) => i / total), exact: false };
+        return { total, starts: Array.from({ length: total }, (_, i) => i / total), exact: false, shared: false };
       });
     cache.set(key, p);
   }

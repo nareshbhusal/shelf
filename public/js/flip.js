@@ -40,7 +40,7 @@ export function openFlip(wrap, book, cb) {
     waiting.close();
     // the same book, with the pages it has here (anything the viewer writes to it lands on this copy; setting your place is told to the server instead);
     // `table` says where each page starts, in the reader's terms, so a page here is a spot there
-    openBook(wrap, Object.assign(Object.create(book), { pages: table.exact ? table.total : pages, table }), cb);
+    openBook(wrap, Object.assign(Object.create(book), { pages: table.shared ? table.total : pages, table }), cb);
   }).catch(() => waiting.close());
   return waiting;
 }

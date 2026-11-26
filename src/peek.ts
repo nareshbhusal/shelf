@@ -24,6 +24,9 @@ export const EPUB_PAGE = { w: 420, h: 620, em: 12 };
 // A PDF or EPUB that is being flipped through stays open for a short while, so each turn doesn't read the whole file again.
 interface Opened { doc: mupdf.Document; pages: number; timer: NodeJS.Timeout; needsFont: boolean; epub: boolean }
 const opened = new Map<string, Opened>();
+// mupdf can count a few pages more at the end of a very big EPUB than it will then hand out (the count is made before the last chapters are laid out for good).
+// When reading every page runs into that, the real last page is noted here and is the count from then on, for the page table and the viewer alike.
+const reach = new Map<string, number>();
 const IDLE_MS = 30_000;
 const MAX_OPEN = 3;
 
@@ -43,6 +46,17 @@ let epubWork = false;
 let standIn = false;
 const standInFonts = new Map<string, mupdf.Font>();
 const STAND_IN_SCRIPTS = new Set(['Latin', 'Greek', 'Cyrillic', 'Common', 'Inherited']);
+// mupdf reports everything it dislikes in a book (a stylesheet it can't parse, a font or picture that isn't in the file, a rule it doesn't know) on the console,
+// again for every page it lays out. None of it stops anything: leave it out, except what is new and not of that kind, once. SHELF_DEBUG_MUPDF=1 shows it all.
+const NOISE = /css syntax error|cannot load font-face|cannot locate font|FT_New_Memory_Face|cannot load image|ignoring stylesheet|cannot find entry|may be locked by DRM|unknown epub version|stale accelerator|repeated \d+ times|cannot find font|no glyph|not inside (?:table|table-row|table-group) element|unsupported (?:css|font|image)/i;
+const seenLog = new Set<string>();
+mupdf.setLog((message: string) => {
+  const m = String(message).trim();
+  if (!m || (!process.env.SHELF_DEBUG_MUPDF && NOISE.test(m)) || seenLog.has(m)) return;
+  if (seenLog.size < 300) seenLog.add(m);
+  console.warn(`[mupdf] ${m}`);
+});
+
 mupdf.installLoadFontFunction((name, script, bold, italic) => {
   if (!epubWork) return null;
   const byScript = !!script && script !== 'undefined';
@@ -60,6 +74,8 @@ async function openPdf(book: BookRow, abs: string): Promise<Opened | null> {
   if (have) {
     clearTimeout(have.timer);
     have.timer = setTimeout(() => close(key), IDLE_MS);
+    const r = reach.get(key);
+    if (r !== undefined && r < have.pages) have.pages = r;
     opened.delete(key); // move to the end: most recently used
     opened.set(key, have);
     return have;
@@ -83,6 +99,8 @@ async function openPdf(book: BookRow, abs: string): Promise<Opened | null> {
     epubWork = false;
     standIn = false;
   }
+  const r = reach.get(key);
+  if (r !== undefined && r < pages) pages = r;
   const o: Opened = { doc, pages, needsFont: !!mended?.needsFont, epub, timer: setTimeout(() => close(key), IDLE_MS) };
   opened.set(key, o);
   while (opened.size > MAX_OPEN) close(opened.keys().next().value as string);
@@ -114,7 +132,10 @@ export function peekPage(book: BookRow, n: number, width: number): Promise<Buffe
       let page: mupdf.Page;
       let pix: mupdf.Pixmap;
       try {
-        page = o.doc.loadPage(n - 1);
+        try { page = o.doc.loadPage(n - 1); } catch (e) {
+          if (/invalid page number/i.test((e as Error).message) && n > o.pages - 24) { reach.set(book.fingerprint, n - 1); o.pages = Math.min(o.pages, n - 1); throw new PeekError(404, 'page out of range'); }
+          throw e;
+        }
         const [x0, , x1] = page.getBounds();
         const scale = w / Math.max(1, x1 - x0);
         pix = page.toPixmap(mupdf.Matrix.scale(scale, scale), mupdf.ColorSpace.DeviceRGB, false, false); // no annotations in the picture: the viewer draws them itself, so a change shows at once
@@ -150,26 +171,60 @@ export function peekPages(book: BookRow): Promise<number> {
   });
 }
 
-/** The text of every page of an EPUB as laid out here (for epubpages.ts). Taken a few pages at a time, so that the server stays responsive and page requests are not held up. */
+/**
+ * The text of every page of an EPUB as laid out here (for epubpages.ts). Taken a few pages at a time, and the server is let breathe between them: the pages are
+ * worked at in one run of calls that never wait for anything, so without that a big book (3000+ pages) would hold up every other request, the library list
+ * included, until it was done. If the book turns out to have a different number of pages from one moment to the next (it was closed and opened again), it is
+ * started over once on a fresh copy, rather than reading pages that are not there.
+ */
 export async function peekAllText(book: BookRow): Promise<string[]> {
-  const total = await peekPages(book);
-  const out: string[] = [];
-  for (let a = 0; a < total; a += 24) {
-    await limit(async () => {
-      const o = await openPdf(book, path.join(LIBRARY_DIR, book.path));
-      if (!o) throw new PeekError(413, 'this file is too large to preview here');
-      for (let n = a; n < Math.min(total, a + 24); n++) {
-        const page = o.doc.loadPage(n);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const total = await peekPages(book);
+    const out: string[] = [];
+    let drift = '';
+    let tail = -1;
+    for (let a = 0; a < total && !drift; a += 24) {
+      await new Promise((r) => setImmediate(r)); // other requests get their turn
+      await limit(async () => {
+        const o = await openPdf(book, path.join(LIBRARY_DIR, book.path));
+        if (!o) throw new PeekError(413, 'this file is too large to preview here');
+        if (o.pages !== total) { drift = `the book now has ${o.pages} pages, not ${total}`; return; }
+        epubWork = o.epub; // (a page can be laid out again while it is read, and must be with the same fonts as the first time)
+        standIn = o.needsFont;
+        let n = a;
         try {
-          const st = page.toStructuredText('preserve-whitespace');
-          try { out.push(st.asText()); } finally { try { st.destroy(); } catch { /* not needed */ } }
+          for (; n < Math.min(total, a + 24); n++) {
+            const page = o.doc.loadPage(n);
+            try {
+              const st = page.toStructuredText('preserve-whitespace');
+              try { out.push(st.asText()); } finally { try { st.destroy(); } catch { /* not needed */ } }
+            } finally {
+              try { page.destroy(); } catch { /* not needed */ }
+            }
+          }
+        } catch (e) {
+          const msg = (e as Error).message;
+          if (/invalid page number/i.test(msg) && n >= total - 24 && n === out.length) tail = n; // only the very end is missing: that is the real page count
+          else drift = msg;
         } finally {
-          try { page.destroy(); } catch { /* not needed */ }
+          epubWork = false;
+          standIn = false;
         }
-      }
-    });
+      });
+      if (tail >= 0) break;
+    }
+    if (tail >= 0 && !drift) {
+      console.warn(`[shelf] "${book.title}" has ${tail} pages that can be shown, not the ${total} mupdf counted; using ${tail}`);
+      reach.set(book.fingerprint, tail);
+      const o = opened.get(book.fingerprint);
+      if (o) o.pages = Math.min(o.pages, tail);
+      return out;
+    }
+    if (!drift) return out;
+    console.warn(`[shelf] reading all the pages of "${book.title}" went wrong (${drift}); ${attempt ? 'giving up on exact page numbers for it' : 'starting again on a fresh copy'}`);
+    close(book.fingerprint);
   }
-  return out;
+  throw new PeekError(503, 'the pages changed while they were being read');
 }
 
 /** Where the words of a page are, as fractions (0..1) of the page: [x, y, width, height, word]. Lets the viewer lay selectable text over the picture. */
@@ -185,7 +240,16 @@ export function peekText(book: BookRow, n: number): Promise<TextWord[]> {
     const o = await openPdf(book, path.join(LIBRARY_DIR, book.path));
     if (!o) throw new PeekError(413, 'this PDF is too large to preview here');
     if (n < 1 || n > o.pages) throw new PeekError(404, 'page out of range');
-    const page = o.doc.loadPage(n - 1);
+    epubWork = o.epub;
+    standIn = o.needsFont;
+    let page: mupdf.Page;
+    try {
+      page = o.doc.loadPage(n - 1);
+    } catch (e) {
+      epubWork = false;
+      standIn = false;
+      throw e;
+    }
     const words: TextWord[] = [];
     try {
       const [x0, y0, x1, y1] = page.getBounds();
@@ -215,6 +279,8 @@ export function peekText(book: BookRow, n: number): Promise<TextWord[]> {
       flush();
       try { st.destroy(); } catch { /* not needed */ }
     } finally {
+      epubWork = false;
+      standIn = false;
       try { page.destroy(); } catch { /* not needed */ }
     }
     recentText.set(key, words);
