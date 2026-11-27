@@ -182,3 +182,6 @@ export function goBack(fallbackHref) {
   if (history.state?.from) history.back();
   else location.hash = fallbackHref;
 }
+
+/** Part of every page-picture address: raised whenever Shelf changes how a page is drawn, because the browser keeps those pictures for a day and would go on showing old ones (with the old boxes). */
+export const RENDER_V = 4;

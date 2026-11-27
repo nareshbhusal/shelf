@@ -1,5 +1,5 @@
 import { api, coverUrl } from './api.js';
-import { h, icon } from './util.js';
+import { RENDER_V, h, icon } from './util.js';
 import { setSetting, settings } from './settings.js';
 import { castOf, swing, sweep, turnMs } from './leaf.js';
 import { MARGIN, bulkOf, clothOf, edgesOf, makeDecor, placeDecor } from './bookdecor.js';
@@ -54,7 +54,7 @@ function openBook(wrap, book, { open, saved }) {
   ar = Math.min(1.6, Math.max(0.45, ar));
   const bulk = bulkOf(total); // as on the card: how thick a book this is
   let px = 0;
-  const url = (n) => (n === 0 ? coverUrl(book) : `/api/books/${book.id}/peek/${n}?w=${px}&v=${book.fingerprint}`);
+  const url = (n) => (n === 0 ? coverUrl(book) : `/api/books/${book.id}/peek/${n}?w=${px}&v=${book.fingerprint}&r=${RENDER_V}`);
 
   // What is on each side of a spread. Spread 0 is the closed book; spread 1 shows the inside of the cover and page 1; after that two pages each.
   // A side can be a page number, 'end' (the endpaper, inside a cover) or null (nothing: the closed book has no left side).

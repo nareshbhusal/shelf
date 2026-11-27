@@ -13,7 +13,7 @@ type Kind = 'serif' | 'sans';
 type Style = 'r' | 'b' | 'i' | 'bi';
 
 const DIRS = ['/usr/share/fonts/truetype', '/usr/share/fonts/opentype', '/usr/share/fonts', '/usr/local/share/fonts', '/usr/share/fonts/TTF', '/Library/Fonts', '/System/Library/Fonts/Supplemental'];
-// Family by family, the file names of its four faces, best choice first. All of them cover Latin Extended Additional.
+// Family by family, the file names of its four faces, best choice first. A face is used only if it has every transliteration letter (coversNeeded): older versions of some of these families lack them.
 const FAMILIES: Record<Kind, Array<{ dirs: string[]; names: Record<Style, string> }>> = {
   serif: [
     { dirs: ['liberation', 'liberation2', 'liberation-fonts', 'liberation/liberation-serif'], names: { r: 'LiberationSerif-Regular.ttf', b: 'LiberationSerif-Bold.ttf', i: 'LiberationSerif-Italic.ttf', bi: 'LiberationSerif-BoldItalic.ttf' } },
@@ -41,12 +41,56 @@ async function readFont(file: string): Promise<Buffer | null> {
   }
 }
 
+// The letters a stand-in must have: those of transliterated Sanskrit and Pali (macron, dot below, dot above, acute, tilde) and the combining marks that make them.
+const NEEDED = [0x101, 0x12b, 0x16b, 0x15a, 0x15b, 0xf1, 0x1e0d, 0x1e25, 0x1e37, 0x1e39, 0x1e41, 0x1e43, 0x1e45, 0x1e47, 0x1e5b, 0x1e5d, 0x1e63, 0x1e6d, 0x1e6f, 0x301, 0x304, 0x307, 0x323];
+
+/** Whether a TrueType font has a glyph for every one of those letters (read from its cmap: formats 4 and 12). A font that lacks some would show them as boxes. */
+export function coversNeeded(font: Buffer): boolean {
+  try {
+    if (font.length < 12) return false;
+    const n = font.readUInt16BE(4);
+    let cmap = -1;
+    for (let i = 0; i < n; i++) if (font.toString('latin1', 12 + i * 16, 16 + i * 16) === 'cmap') cmap = font.readUInt32BE(20 + i * 16);
+    if (cmap < 0) return false;
+    const subs = font.readUInt16BE(cmap + 2);
+    const has = new Set<number>();
+    for (let i = 0; i < subs; i++) {
+      const plat = font.readUInt16BE(cmap + 4 + i * 8);
+      const off = cmap + font.readUInt32BE(cmap + 8 + i * 8);
+      const fmt = font.readUInt16BE(off);
+      if (fmt === 4 && (plat === 3 || plat === 0)) {
+        const segX2 = font.readUInt16BE(off + 6);
+        const ends = off + 14, starts = ends + segX2 + 2, deltas = starts + segX2, ranges = deltas + segX2;
+        for (let sI = 0; sI < segX2 / 2; sI++) {
+          const end = font.readUInt16BE(ends + sI * 2), start = font.readUInt16BE(starts + sI * 2), ro = font.readUInt16BE(ranges + sI * 2), delta = font.readInt16BE(deltas + sI * 2);
+          for (const c of NEEDED) {
+            if (c < start || c > end) continue;
+            let g: number;
+            if (ro === 0) g = (c + delta) & 0xffff;
+            else { const at = ranges + sI * 2 + ro + (c - start) * 2; g = at + 2 <= font.length ? font.readUInt16BE(at) : 0; if (g) g = (g + delta) & 0xffff; }
+            if (g) has.add(c);
+          }
+        }
+      } else if (fmt === 12) {
+        const groups = font.readUInt32BE(off + 12);
+        for (let g = 0; g < groups; g++) {
+          const start = font.readUInt32BE(off + 16 + g * 12), end = font.readUInt32BE(off + 20 + g * 12), gid = font.readUInt32BE(off + 24 + g * 12);
+          for (const c of NEEDED) if (c >= start && c <= end && gid + (c - start) > 0) has.add(c);
+        }
+      }
+    }
+    return NEEDED.every((c) => has.has(c));
+  } catch {
+    return false;
+  }
+}
+
 async function findFace(kind: Kind, style: Style): Promise<Buffer | null> {
   for (const fam of FAMILIES[kind]) {
     for (const root of DIRS) {
       for (const d of fam.dirs) {
         const b = await readFont(`${root}/${d ? d + '/' : ''}${fam.names[style]}`);
-        if (b) return b;
+        if (b && coversNeeded(b)) return b; // a font on this computer that lacks some of the letters would draw them as boxes: not that one
       }
     }
   }

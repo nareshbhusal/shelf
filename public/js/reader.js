@@ -2,7 +2,7 @@ import { api, fileUrl, pageUrl } from './api.js';
 import { createAnnotations } from './annotations.js';
 import { bookName, onSettings, pageAnim, setSetting, settings } from './settings.js';
 import { MARGIN, clothOf } from './bookdecor.js';
-import { h, hashFor, icon, clamp, dirSegments, goBack } from './util.js';
+import { RENDER_V, h, hashFor, icon, clamp, dirSegments, goBack } from './util.js';
 import { appName } from './store.js';
 import { openFileInfo } from './fileinfo.js';
 import { openWithMenu } from './openwith.js';
@@ -917,7 +917,7 @@ async function comicImpl(book, scroller, pagesEl, makeTracker, setCount, parts =
     bound: () => !!env?.binding,
     total: () => book.pages || 0,
     cloth: () => clothOf(book),
-    peekUrl: (el, w) => { const part = list.find((p) => String(p.id) === el.dataset.part) ?? book; return `/api/books/${part.id}/peek/${el.dataset.page}?w=${w}&v=${part.fingerprint}`; },
+    peekUrl: (el, w) => { const part = list.find((p) => String(p.id) === el.dataset.part) ?? book; return `/api/books/${part.id}/peek/${el.dataset.page}?w=${w}&v=${part.fingerprint}&r=${RENDER_V}`; },
   });
   strip.set(paged);
 
@@ -1241,7 +1241,7 @@ async function pdfImpl(book, scroller, pagesEl, makeTracker, setTotal, ann = nul
     bound: () => !!env?.binding,
     total: () => book.pages || 0,
     cloth: () => clothOf(book),
-    peekUrl: (el, w) => `/api/books/${book.id}/peek/${el.dataset.page}?w=${w}&v=${book.fingerprint}`,
+    peekUrl: (el, w) => `/api/books/${book.id}/peek/${el.dataset.page}?w=${w}&v=${book.fingerprint}&r=${RENDER_V}`,
     onResize: (n) => {
       pages.forEach(sizeEl);
       pages.filter((p) => p.visible).forEach(render);

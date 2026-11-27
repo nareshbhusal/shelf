@@ -27,6 +27,7 @@ const opened = new Map<string, Opened>();
 // mupdf can count a few pages more at the end of a very big EPUB than it will then hand out (the count is made before the last chapters are laid out for good).
 // When reading every page runs into that, the real last page is noted here and is the count from then on, for the page table and the viewer alike.
 const reach = new Map<string, number>();
+const told = new Set<string>();
 const IDLE_MS = 30_000;
 const MAX_OPEN = 3;
 
@@ -84,7 +85,11 @@ async function openPdf(book: BookRow, abs: string): Promise<Opened | null> {
   const epub = book.format === 'epub';
   // An EPUB goes through a mended copy when mupdf would otherwise show it badly: pictures it can't draw, scrambled fonts (see epubmend.ts). A book with letters
   // its built-in font lacks gets a font from this computer to stand in for it, for the layout only.
-  const mended = epub ? await mendedEpub(abs).catch(() => null) : null;
+  const mended = epub ? await mendedEpub(abs).catch((e) => { console.warn(`[shelf] could not make the corrected copy of "${book.title}" the viewer draws from, so it is drawn as it is: ${(e as Error).message}`); return null; }) : null;
+  if (mended && !told.has(key)) { // once per book: what the viewer is drawing from, for finding out why a letter is wrong
+    told.add(key);
+    if (mended.needsFont) console.log(`[shelf] "${book.title}": ${mended.bytes ? 'corrected copy in use' : 'drawn as it is'}; transliterated letters ${mended.standIn === null ? 'NOT set in the stand-in font (it did not load)' : mended.standIn ? 'set in the stand-in font' : 'found, but none to wrap'}`);
+  }
   const bytes = mended?.bytes ?? (await fs.readFile(abs));
   if (epub) await loadFallbackFonts(); // the four font files, read once
   epubWork = epub;

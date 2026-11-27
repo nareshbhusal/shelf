@@ -262,6 +262,8 @@ export interface Mended {
   bytes: Buffer | null;
   /** The text has letters the built-in font lacks, so a font that has them should stand in for it. */
   needsFont: boolean;
+  /** What the stand-in font was wanted for and whether it could be put in: letters wrapped (true), none to wrap (false), or the font could not be loaded (null). */
+  standIn: boolean | null;
 }
 
 export async function mendedEpub(abs: string): Promise<Mended> {
@@ -271,7 +273,7 @@ export async function mendedEpub(abs: string): Promise<Mended> {
   const changed = new Map<string, Buffer>();
   const removed = new Set<string>();
   let needsFont = false;
-  const faces = await fallbackFaces().catch(() => null); // the stand-in letters' font, which goes into the copy
+  const faces = await fallbackFaces().catch((e) => { console.warn(`[shelf] the stand-in font for transliterated letters could not be loaded: ${(e as Error).message}`); return null; }); // the stand-in letters' font, which goes into the copy
   let usedFaces = false;
   const names = new Set(entries.map((e) => e.name));
   const ctx: Ctx = { names, lower: new Map(entries.map((e) => [e.name.toLowerCase(), e.name])) };
@@ -318,9 +320,10 @@ export async function mendedEpub(abs: string): Promise<Mended> {
   }
   const added = new Map<string, Buffer>();
   if (faces && usedFaces) for (const k of Object.keys(FB_FILE)) added.set(`${FB_DIR}/${FB_FILE[k]}`, faces[k as keyof typeof faces]);
-  if (!changed.size && !removed.size) return { bytes: null, needsFont };
+  const standIn = faces ? usedFaces : null;
+  if (!changed.size && !removed.size) return { bytes: null, needsFont, standIn };
   const total = entries.reduce((a, e) => a + e.size, 0);
-  if (total > MAX_BYTES) return { bytes: null, needsFont };
+  if (total > MAX_BYTES) return { bytes: null, needsFont, standIn };
   const all: Array<{ name: string; data: Buffer }> = [];
   const order = entries.map((e) => e.name).filter((n) => !removed.has(n));
   const rest = new Map<string, Buffer>();
@@ -331,5 +334,5 @@ export async function mendedEpub(abs: string): Promise<Mended> {
     if (data) all.push({ name: n, data });
   }
   for (const [name, data] of added) all.push({ name, data });
-  return { bytes: zipOf(all), needsFont };
+  return { bytes: zipOf(all), needsFont, standIn };
 }
