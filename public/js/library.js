@@ -749,6 +749,18 @@ export function createLibraryView(route) {
     const items = [];
     if (isAdded) items.push(addedNote());
     const panel = series ? seriesPanel() : null;
+    // A search also finds folders: one whose own name has a search word, and whose path has all of them ("manga" finds the folder manga; "manga one" finds manga/One Piece).
+    if (searchQ && (ctx.kind === 'all' || ctx.kind === 'files')) {
+      const terms = searchQ.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+      const inside = ctx.kind === 'files' && ctx.dir ? `${ctx.dir}/` : '';
+      const shownAsSeries = new Set(entries.filter((e) => e.seriesCard).map((e) => e.seriesCard.dir));
+      for (const d of store.tree.dirs) {
+        const path = d.path.toLowerCase();
+        if (inside && !d.path.startsWith(inside)) continue;
+        if (!d.total || shownAsSeries.has(d.path)) continue;
+        if (terms.every((t) => path.includes(t)) && terms.some((t) => d.name.toLowerCase().includes(t))) items.push(folderCard(d));
+      }
+    }
     if (ctx.kind === 'files' && !isRec()) {
       const dir = route.rest.join('/');
       for (const d of store.tree.dirs.filter((x) => x.parent === dir)) {

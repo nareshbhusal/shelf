@@ -42,7 +42,7 @@ const topbar = h(
   h('div', { class: 'search-wrap' }, icon('search', 16), searchInput),
   scanPill,
   rescanBtn,
-  h('button', { class: 'icon-btn', title: 'Settings (,)', onClick: openSettings }, icon('settings')),
+  h('button', { class: 'icon-btn', title: 'Settings (,)', onClick: () => openSettings() }, icon('settings')),
 );
 const main = h('main', { class: 'main' });
 const shell = h('div', { class: 'shell' }, sidebar, h('div', { class: 'content-col' }, topbar, main));
@@ -82,7 +82,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     searchInput.focus();
     searchInput.select();
-  } else if (e.key === ',' && !e.ctrlKey && !e.metaKey && !e.altKey && t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT' && !document.querySelector('.modal')) {
+  } else if (e.key === ',' && !e.ctrlKey && !e.metaKey && !e.altKey && t !== 'INPUT' && t !== 'TEXTAREA' && t !== 'SELECT' && route.name !== 'read' && !document.querySelector('.modal')) {
     e.preventDefault();
     openSettings();
   }
@@ -264,7 +264,7 @@ function renderSidebar() {
       ...orderedSections,
     ),
     h('div', { class: 'side-foot' },
-      h('button', { class: 'nav-item', onClick: openSettings, title: 'Display, programs, storage, backup  (,)' }, icon('settings', 15), h('span', { class: 'grow' }, 'Settings')),
+      h('button', { class: 'nav-item', onClick: () => openSettings(), title: 'Display, programs, storage, backup  (,)' }, icon('settings', 15), h('span', { class: 'grow' }, 'Settings')),
     ),
   );
 }

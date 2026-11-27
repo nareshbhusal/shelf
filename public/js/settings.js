@@ -350,7 +350,9 @@ const TABS = [
 const DEPENDS = { flipButton: 'flipPeek', flipSpace: 'flipPeek', flipDim: 'flipPeek' };
 let lastTab = 'library';
 
-export function openSettings() {
+// opts.only: show just those pages (the reader opens it with its own three); opts.title: the dialog's title.
+export function openSettings(opts) {
+  const only = Array.isArray(opts?.only) ? opts.only : null;
   const info = store.info;
   const busy = (btn, fn) => async () => {
     btn.disabled = true;
@@ -526,6 +528,8 @@ export function openSettings() {
   const items = new Map(SCHEMA.flatMap((g) => g.items).filter((it) => !it.hidden).map((it) => [it.key, it]));
   const placed = new Set(TABS.flatMap((t) => (t.parts ?? []).flatMap((p) => p[1])));
   const look = TABS.find((t) => t.id === 'look');
+  const tabs = only ? TABS.filter((t) => only.includes(t.id)) : TABS;
+  let cur = tabs.some((t) => t.id === lastTab) ? lastTab : tabs[0].id;
   for (const k of items.keys()) if (!placed.has(k)) look.parts.push(['More', [k]]);
   const same = (it) => String(settings[it.key]) === String(it.default);
 
@@ -549,7 +553,7 @@ export function openSettings() {
   const find = h('input', { type: 'search', class: 'set-find', placeholder: 'Search settings', 'aria-label': 'Search settings' });
   const tabBtns = new Map();
   const side = h('nav', { class: 'set-side', 'aria-label': 'Settings pages' }, find);
-  for (const t of TABS) {
+  for (const t of tabs) {
     const b = h('button', { class: 'set-tab', type: 'button', onClick: () => showTab(t.id) }, t.name);
     tabBtns.set(t.id, b);
     side.append(b);
@@ -557,13 +561,14 @@ export function openSettings() {
   let resetTab = null;
   function refreshAll() {
     for (const r of rows.values()) r.refresh();
-    const t = TABS.find((x) => x.id === lastTab);
+    const t = tabs.find((x) => x.id === cur);
     if (resetTab && t?.parts) resetTab.style.visibility = t.parts.some((p) => p[1].some((k) => !same(items.get(k)))) ? 'visible' : 'hidden';
   }
   function showTab(id) {
-    lastTab = id;
     find.value = '';
-    const t = TABS.find((x) => x.id === id) ?? TABS[0];
+    const t = tabs.find((x) => x.id === id) ?? tabs[0];
+    cur = t.id;
+    if (!only) lastTab = t.id;
     for (const [k, b] of tabBtns) b.setAttribute('aria-selected', String(k === t.id));
     resetTab = null;
     const head = h('div', { class: 'set-head' }, h('h3', { class: 'set-title' }, t.name));
@@ -592,7 +597,7 @@ export function openSettings() {
     resetTab = null;
     const out = [h('div', { class: 'set-head' }, h('h3', { class: 'set-title' }, 'Search results'))];
     let n = 0;
-    for (const t of TABS) {
+    for (const t of tabs) {
       for (const [sub, keys] of t.parts ?? []) {
         for (const k of keys) {
           const r = rows.get(k);
@@ -612,11 +617,11 @@ export function openSettings() {
     pane.scrollTop = 0;
     refreshAll();
   }
-  find.addEventListener('input', () => (find.value.trim() ? showFound(find.value) : showTab(lastTab)));
+  find.addEventListener('input', () => (find.value.trim() ? showFound(find.value) : showTab(cur)));
   // any change to an option (a control, its reset mark, the sidebar-order arrows) updates the marks and the options that depend on it
   for (const ev of ['change', 'input', 'click']) pane.addEventListener(ev, () => setTimeout(refreshAll, 0));
 
-  const m = modal({ title: 'Display & settings', body: [h('div', { class: 'set-wrap' }, side, pane)], wide: true });
+  const m = modal({ title: opts?.title ?? 'Display & settings', body: [h('div', { class: 'set-wrap' }, side, pane)], wide: true });
   m.el.classList.add('settings-dlg');
-  showTab(lastTab);
+  showTab(cur);
 }

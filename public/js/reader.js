@@ -1,6 +1,6 @@
 import { api, fileUrl, pageUrl } from './api.js';
 import { createAnnotations } from './annotations.js';
-import { bookName, onSettings, pageAnim, setSetting, settings } from './settings.js';
+import { bookName, onSettings, openSettings, pageAnim, setSetting, settings } from './settings.js';
 import { MARGIN, clothOf } from './bookdecor.js';
 import { RENDER_V, h, hashFor, icon, clamp, dirSegments, goBack } from './util.js';
 import { appName } from './store.js';
@@ -118,6 +118,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     describe: (m) => (isEpub ? `${estPages ? `p. ${tilde()}${pageTable ? pageOf(pageTable, m.frac ?? 0) : clamp(Math.ceil((m.frac ?? 0) * estPages), 1, estPages)} · ` : ''}${Math.floor((m.frac ?? 0) * 100)}%` : `Page ${m.page}`),
     jump: (m) => (isEpub ? impl?.goToPos?.(m.page, m.pos ?? 0) : impl?.goTo(m.page, true)),
   });
+  const openReaderSettings = () => openSettings({ only: ['flip', 'look', 'reader'], title: 'Reader settings' });
   const bar = h(
     'div',
     { class: 'reader-bar' },
@@ -137,6 +138,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
     search ? search.button : null,
     bookmarks.button,
     h('button', { class: 'icon-btn', title: 'File info (I)', onClick: () => openFileInfo(book, ann, { coverFromPage }) }, icon('info', 18)),
+    h('button', { class: 'icon-btn', title: 'Reader settings (,)', onClick: () => openReaderSettings() }, icon('settings', 18)),
     h('span', { class: 'bar-sep' }),
     h('button', { class: 'icon-btn mode-btn', title: 'Reading mode (M)', onClick: () => toggleMode() }, icon('paged', 18)),
     isEpub ? null : h('button', { class: 'icon-btn spread-btn', title: 'Two pages side by side (S)', onClick: () => toggleSpread() }, icon('spread', 18)),
@@ -585,6 +587,7 @@ export async function createReader(bookId, { page: startPage = 0, frac: startFra
       case 'b': case 'B': bookmarks.toggleHere(); break;
       case 'n': case 'N': ann?.toggleDrawer(); break;
       case 'i': case 'I': openFileInfo(book, ann, { coverFromPage }); break;
+      case ',': openReaderSettings(); break;
       case '+': case '=': zoom(1); break;
       case '-': case '_': zoom(-1); break;
       case '0': fitWidth(); break;
